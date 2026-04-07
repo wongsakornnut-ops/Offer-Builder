@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Scenario Feasibility &amp; Package Builder</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config = { darkMode: 'class' }</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+input:focus, textarea:focus { outline: none; }
+input[type=number] { -moz-appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 99px; }
+::-webkit-scrollbar-track { background: transparent; }
+html.dark ::-webkit-scrollbar-thumb { background: #475569; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
+@keyframes scaleIn { from { opacity:0; transform:scale(0.95) } to { opacity:1; transform:scale(1) } }
+.fade-up { animation: fadeUp 0.2s ease-out forwards; }
+.scale-in { animation: scaleIn 0.2s ease-out forwards; }
+.cell-input { width:100%; background:transparent; border:none; font:inherit; color:inherit; padding:2px 6px; border-radius:4px; }
+.cell-input:hover { background: rgba(0,0,0,0.04); }
+.cell-input:focus { background: rgba(99,102,241,0.08); box-shadow: 0 0 0 2px rgba(99,102,241,0.3); }
+html.dark .cell-input:hover { background: rgba(255,255,255,0.06); }
+html.dark .cell-input:focus { background: rgba(99,102,241,0.12); box-shadow: 0 0 0 2px rgba(99,102,241,0.35); }
+.line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+</style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 min-h-screen">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+let _uidCounter = 1000;
+function uid() { return 'id' + (++_uidCounter) + Math.random().toString(36).slice(2,6); }
+
+function currency(n) {
+  if (n === null || n === undefined || isNaN(n)) return '$0';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1000000) return sign + '$' + (abs/1000000).toFixed(1).replace(/\.0$/,'') + 'M';
+  if (abs >= 1000) return sign + '$' + (abs/1000).toFixed(1).replace(/\.0$/,'') + 'K';
+  return sign + '$' + abs.toLocaleString();
+}
+
+function pct(n) {
+  if (n === null || n === undefined || isNaN(n)) return '0.0%';
+  return n.toFixed(1) + '%';
+}
+
+function calcMetrics(scenario) {
+  const units = Number(scenario.units) || 0;
+  const rpu = Number(scenario.revenuePerUnit) || 0;
+  const rev = units * rpu;
+  let tot = 0, direct = 0;
+  (scenario.categories || []).forEach(cat => {
+    (cat.items || []).forEach(item => {
+      const v = Number(item.value) || 0;
+      tot += v;
+      if (cat.isDirectCost) direct += v;
+    });
+  });
+  const gross = rev - direct;
+  const net = rev - tot;
+  const grossMgn = rev > 0 ? (gross / rev) * 100 : 0;
+  const netMgn = rev > 0 ? (net / rev) * 100 : 0;
+  const cpu = units > 0 ? tot / units : 0;
+  const ppu = units > 0 ? net / units : 0;
+  return { rev, tot, direct, gross, net, grossMgn, netMgn, cpu, ppu };
+}
+
+const SCOL = [
+  { dot:'#6366f1', text:'text-indigo-600 dark:text-indigo-400', bg:'bg-indigo-600', lightBg:'bg-indigo-50 dark:bg-indigo-900/30', border:'border-indigo-300 dark:border-indigo-700', label:'A' },
+  { dot:'#0ea5e9', text:'text-sky-600 dark:text-sky-400',       bg:'bg-sky-600',    lightBg:'bg-sky-50 dark:bg-sky-900/30',    border:'border-sky-300 dark:border-sky-700',    label:'B' },
+  { dot:'#8b5cf6', text:'text-violet-600 dark:text-violet-400', bg:'bg-violet-600', lightBg:'bg-violet-50 dark:bg-violet-900/30', border:'border-violet-300 dark:border-violet-700', label:'C' },
+];
+
+// ── Demo Data ──────────────────────────────────────────────────────────────
+const INIT_PROJECTS = [
+  {
+    id:'p1', name:'Annual Conference — Venue & Format Options',
+    description:'Comparing virtual, hybrid, and in-person event formats for the 2026 annual conference.',
+    createdAt:'2026-03-01', updatedAt:'2026-03-28', status:'active', isFavorite:true,
+    scenarios:[
+      {
+        id:'s1', label:'A', name:'Scenario A', subtitle:'Virtual Event',
+        units:500, unitLabel:'attendees', revenuePerUnit:199,
+        notes:'',
+        assumptions:[
+          {id:'a1',label:'Attendees',value:'500 pax'},{id:'a2',label:'Format',value:'Virtual only'},
+          {id:'a3',label:'Duration',value:'2 days'},{id:'a4',label:'Ticket Price',value:'$199/person'},
+          {id:'a5',label:'Platform',value:'Hopin+Zoom'},{id:'a6',label:'Team Size',value:'8 staff'},
+        ],
+        categories:[
+          { id:'c1', name:'Technology', isDirectCost:true, items:[
+            {id:'i1',name:'Platform License',value:12000},
+            {id:'i2',name:'AV & Streaming',value:8500},
+            {id:'i3',name:'Tech Support',value:4000},
+          ]},
+          { id:'c2', name:'Content & Speakers', isDirectCost:true, items:[
+            {id:'i4',name:'Speaker Fees',value:18000},
+            {id:'i5',name:'Content Production',value:10000},
+          ]},
+          { id:'c3', name:'Marketing', isDirectCost:false, items:[
+            {id:'i6',name:'Digital Advertising',value:8000},
+            {id:'i7',name:'Email Campaigns',value:2000},
+          ]},
+          { id:'c4', name:'Operations', isDirectCost:false, items:[
+            {id:'i8',name:'Staff Costs',value:7000},
+            {id:'i9',name:'Admin & Misc',value:2500},
+          ]},
+        ],
+      },
+      {
+        id:'s2', label:'B', name:'Scenario B', subtitle:'Hybrid Event',
+        units:400, unitLabel:'attendees', revenuePerUnit:380,
+        notes:'',
+        assumptions:[
+          {id:'b1',label:'In-Person',value:'200 pax'},{id:'b2',label:'Virtual',value:'200 pax'},
+          {id:'b3',label:'Duration',value:'2 days'},{id:'b4',label:'Ticket',value:'$380/person'},
+          {id:'b5',label:'Venue',value:'Convention Center'},{id:'b6',label:'Team Size',value:'15 staff'},
+        ],
+        categories:[
+          { id:'c5', name:'Technology', isDirectCost:true, items:[
+            {id:'i10',name:'Platform License',value:12000},
+            {id:'i11',name:'AV & Streaming',value:15000},
+            {id:'i12',name:'Tech Support',value:5000},
+          ]},
+          { id:'c6', name:'Content & Speakers', isDirectCost:true, items:[
+            {id:'i13',name:'Speaker Fees',value:20000},
+            {id:'i14',name:'Content Production',value:12000},
+          ]},
+          { id:'c7', name:'Venue & F&B', isDirectCost:true, items:[
+            {id:'i15',name:'Venue Rental',value:10000},
+            {id:'i16',name:'Catering',value:8000},
+          ]},
+          { id:'c8', name:'Marketing', isDirectCost:false, items:[
+            {id:'i17',name:'Digital Advertising',value:8000},
+            {id:'i18',name:'Print & Collateral',value:2000},
+          ]},
+          { id:'c9', name:'Operations', isDirectCost:false, items:[
+            {id:'i19',name:'Staff Costs',value:12000},
+            {id:'i20',name:'Admin & Misc',value:4000},
+          ]},
+        ],
+      },
+      {
+        id:'s3', label:'C', name:'Scenario C', subtitle:'In-Person Premium',
+        units:200, unitLabel:'attendees', revenuePerUnit:890,
+        notes:'',
+        assumptions:[
+          {id:'d1',label:'Attendees',value:'200 pax'},{id:'d2',label:'Format',value:'In-person only'},
+          {id:'d3',label:'Duration',value:'3 days'},{id:'d4',label:'Ticket Price',value:'$890/person'},
+          {id:'d5',label:'Venue',value:'5-Star Hotel'},{id:'d6',label:'Team Size',value:'25 staff'},
+        ],
+        categories:[
+          { id:'c10', name:'Technology', isDirectCost:true, items:[
+            {id:'i21',name:'AV & Production',value:18000},
+            {id:'i22',name:'Live Streaming',value:5000},
+          ]},
+          { id:'c11', name:'Content & Speakers', isDirectCost:true, items:[
+            {id:'i23',name:'Speaker Fees',value:22000},
+            {id:'i24',name:'Content Production',value:10000},
+            {id:'i25',name:'Entertainment',value:5000},
+          ]},
+          { id:'c12', name:'Venue & F&B', isDirectCost:true, items:[
+            {id:'i26',name:'Venue Rental',value:18000},
+            {id:'i27',name:'Premium Catering',value:14000},
+          ]},
+          { id:'c13', name:'Marketing', isDirectCost:false, items:[
+            {id:'i28',name:'Digital Advertising',value:7000},
+            {id:'i29',name:'PR & Partnerships',value:5000},
+          ]},
+          { id:'c14', name:'Operations', isDirectCost:false, items:[
+            {id:'i30',name:'Staff Costs',value:12000},
+            {id:'i31',name:'Logistics',value:4000},
+            {id:'i32',name:'Admin & Misc',value:2000},
+          ]},
+        ],
+      },
+    ],
+  },
+  {
+    id:'p2', name:'SaaS GTM — Channel Strategy Comparison',
+    description:'Comparing product-led, sales-led, and partner distribution strategies.',
+    createdAt:'2026-02-10', updatedAt:'2026-03-15', status:'draft', isFavorite:false,
+    scenarios:[
+      {
+        id:'s4', label:'A', name:'Scenario A', subtitle:'PLG — Product-Led',
+        units:1200, unitLabel:'customers', revenuePerUnit:49,
+        notes:'',
+        assumptions:[
+          {id:'e1',label:'Customers',value:'1200'},{id:'e2',label:'Model',value:'Self-serve PLG'},
+          {id:'e3',label:'ACV',value:'$49/mo'},{id:'e4',label:'CAC',value:'~$100'},
+        ],
+        categories:[
+          { id:'c15', name:'Product & Engineering', isDirectCost:true, items:[
+            {id:'i33',name:'Infrastructure',value:18000},
+            {id:'i34',name:'Onboarding Dev',value:12000},
+          ]},
+          { id:'c16', name:'Growth & Marketing', isDirectCost:true, items:[
+            {id:'i35',name:'Content Marketing',value:20000},
+            {id:'i36',name:'SEO & Ads',value:15000},
+            {id:'i37',name:'Community',value:8000},
+          ]},
+          { id:'c17', name:'Customer Success', isDirectCost:false, items:[
+            {id:'i38',name:'Support Team',value:24000},
+            {id:'i39',name:'Tooling',value:6000},
+          ]},
+          { id:'c18', name:'G&A', isDirectCost:false, items:[
+            {id:'i40',name:'Legal & Finance',value:10000},
+            {id:'i41',name:'Office & Misc',value:7000},
+          ]},
+        ],
+      },
+      {
+        id:'s5', label:'B', name:'Scenario B', subtitle:'Sales-Led Growth',
+        units:120, unitLabel:'customers', revenuePerUnit:990,
+        notes:'',
+        assumptions:[
+          {id:'f1',label:'Customers',value:'120'},{id:'f2',label:'Model',value:'Enterprise Sales'},
+          {id:'f3',label:'ACV',value:'$990/mo'},{id:'f4',label:'Sales Cycle',value:'90 days'},
+        ],
+        categories:[
+          { id:'c19', name:'Sales Team', isDirectCost:true, items:[
+            {id:'i42',name:'AE Salaries',value:80000},
+            {id:'i43',name:'SDR Team',value:40000},
+            {id:'i44',name:'Sales Tools',value:12000},
+          ]},
+          { id:'c20', name:'Marketing', isDirectCost:true, items:[
+            {id:'i45',name:'Demand Generation',value:25000},
+            {id:'i46',name:'Events & Conferences',value:10000},
+          ]},
+          { id:'c21', name:'Customer Success', isDirectCost:false, items:[
+            {id:'i47',name:'CSM Team',value:35000},
+            {id:'i48',name:'Implementation',value:15000},
+          ]},
+          { id:'c22', name:'G&A', isDirectCost:false, items:[
+            {id:'i49',name:'Legal & Finance',value:12000},
+            {id:'i50',name:'Office & Misc',value:8000},
+            {id:'i51',name:'Leadership',value:25000},
+          ]},
+        ],
+      },
+      {
+        id:'s6', label:'C', name:'Scenario C', subtitle:'Partner Channel',
+        units:400, unitLabel:'customers', revenuePerUnit:299,
+        notes:'',
+        assumptions:[
+          {id:'g1',label:'Customers',value:'400'},{id:'g2',label:'Model',value:'Partner/Reseller'},
+          {id:'g3',label:'ACV',value:'$299/mo'},{id:'g4',label:'Partners',value:'12 active'},
+        ],
+        categories:[
+          { id:'c23', name:'Partner Program', isDirectCost:true, items:[
+            {id:'i52',name:'Partner Commissions',value:28000},
+            {id:'i53',name:'Partner Enablement',value:15000},
+            {id:'i54',name:'Co-Marketing',value:12000},
+          ]},
+          { id:'c24', name:'Product & Support', isDirectCost:true, items:[
+            {id:'i55',name:'Infrastructure',value:14000},
+            {id:'i56',name:'Partner Support',value:10000},
+          ]},
+          { id:'c25', name:'Marketing', isDirectCost:false, items:[
+            {id:'i57',name:'Brand & Content',value:15000},
+            {id:'i58',name:'Digital Ads',value:8000},
+          ]},
+          { id:'c26', name:'G&A', isDirectCost:false, items:[
+            {id:'i59',name:'Legal & Finance',value:10000},
+            {id:'i60',name:'Office & Misc',value:6000},
+          ]},
+        ],
+      },
+    ],
+  },
+];
+
+const INIT_PACKAGES = [
+  { id:'pkg1', name:'Virtual Event Baseline', category:'Events', tags:['virtual','conference','200-500pax'], description:'Cost model for virtual-only conference events with 200-500 attendees. Includes platform, AV, speakers, and marketing.', saveType:'package', isFavorite:true, usageCount:12, createdAt:'2026-03-28', metrics:{rev:99500,cost:72000,profit:27500,margin:27.6} },
+  { id:'pkg2', name:'Hybrid Conference Mid-Scale', category:'Events', tags:['hybrid','conference','mid-scale'], description:'Balanced hybrid event model combining in-person venue with virtual streaming capabilities.', saveType:'package', isFavorite:false, usageCount:8, createdAt:'2026-03-28', metrics:{rev:152000,cost:108000,profit:44000,margin:28.9} },
+  { id:'pkg3', name:'Premium In-Person Conference', category:'Events', tags:['in-person','premium','executive'], description:'High-touch in-person conference template for executive and premium audience segments. 5-star venue included.', saveType:'template', isFavorite:true, usageCount:5, createdAt:'2026-03-28', metrics:{rev:178000,cost:122000,profit:56000,margin:31.5} },
+  { id:'pkg4', name:'PLG SaaS Launch Model', category:'SaaS', tags:['plg','saas','growth'], description:'Product-led growth cost model for early-stage SaaS companies targeting self-serve customer acquisition.', saveType:'template', isFavorite:false, usageCount:3, createdAt:'2026-03-15', metrics:{rev:58800,cost:120000,profit:-61200,margin:-104.1} },
+  { id:'pkg5', name:'Enterprise Sales Motion', category:'SaaS', tags:['enterprise','sales-led','b2b'], description:'Full-cycle enterprise sales model including SDR, AE, and CSM teams for high-ACV SaaS products.', saveType:'package', isFavorite:true, usageCount:7, createdAt:'2026-03-15', metrics:{rev:118800,cost:170256,profit:-51456,margin:-43.3} },
+  { id:'pkg6', name:'Standard Catering 80 Pax', category:'Food & Beverage', tags:['catering','80pax','standard'], description:'Baseline catering cost model for 80-person events. Includes setup, service staff, and standard menu options.', saveType:'package', isFavorite:true, usageCount:24, createdAt:'2026-01-15', metrics:{rev:28000,cost:17500,profit:10500,margin:37.5} },
+  { id:'pkg7', name:'Digital Marketing Campaign', category:'Marketing', tags:['digital','ads','content'], description:'Full-funnel digital marketing campaign template including paid ads, content production, and email sequences.', saveType:'template', isFavorite:false, usageCount:15, createdAt:'2026-02-20', metrics:{rev:95000,cost:42000,profit:53000,margin:55.8} },
+  { id:'pkg8', name:'Consulting Fixed Fee Project', category:'Professional Services', tags:['consulting','fixed-fee','project'], description:'Fixed-fee consulting engagement model covering discovery, delivery, and review phases for 3-month projects.', saveType:'package', isFavorite:false, usageCount:9, createdAt:'2026-02-05', metrics:{rev:75000,cost:38000,profit:37000,margin:49.3} },
+];
+
+// ── Icon Component ─────────────────────────────────────────────────────────
+const ICONS = {
+  plus:        'M12 5v14M5 12h14',
+  minus:       'M5 12h14',
+  x:           'M6 6l12 12M6 18L18 6',
+  check:       'M5 13l4 4L19 7',
+  search:      'M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z',
+  filter:      'M3 6h18M7 12h10M11 18h2',
+  moon:        'M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z',
+  sun:         'M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42M12 7a5 5 0 1 0 0 10A5 5 0 0 0 12 7z',
+  chevDown:    'M6 9l6 6 6-6',
+  chevUp:      'M18 15l-6-6-6 6',
+  chevRight:   'M9 18l6-6-6-6',
+  chevLeft:    'M15 18l-6-6 6-6',
+  arrowLeft:   'M19 12H5M12 5l-7 7 7 7',
+  arrowRight:  'M5 12h14M12 5l7 7-7 7',
+  edit:        'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z',
+  trash:       'M3 6h18M8 6V4h8v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6',
+  copy:        'M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2M16 8h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-2',
+  star:        'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
+  download:    'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
+  save:        'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8',
+  pkg:         'M16.5 9.4 7.55 4.24M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.27 6.96 12 12.01l8.73-5.05M12 22.08V12',
+  bar:         'M18 20V10M12 20V4M6 20v-6',
+  trendUp:     'M23 6l-9.5 9.5-5-5L1 18M17 6h6v6',
+  trendDown:   'M23 18l-9.5-9.5-5 5L1 6M17 18h6v-6',
+  tag:         'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01',
+  clock:       'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2',
+  zap:         'M13 2L3 14h9l-1 8 10-12h-9l1-8z',
+  dollar:      'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
+  users:       'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
+  activity:    'M22 12h-4l-3 9L9 3l-3 9H2',
+  info:        'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 8h.01M12 12v4',
+  grid:        'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
+  list:        'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  sparkle:     'M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3zM5 18l.75 2.25L8 21l-2.25.75L5 24l-.75-2.25L2 21l2.25-.75L5 18zM19 2l.5 1.5L21 4l-1.5.5L19 6l-.5-1.5L17 4l1.5-.5L19 2z',
+  alert:       'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
+  eye:         'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  layers:      'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
+  refresh:     'M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15',
+};
+
+function Icon({ name, size=16, cls='' }) {
+  const d = ICONS[name];
+  if (!d) return null;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      className={cls}>
+      <path d={d} />
+    </svg>
+  );
+}
+
+// ── Base UI Components ─────────────────────────────────────────────────────
+function Btn({ v='primary', sz='md', cls='', disabled=false, onClick, children, title }) {
+  const base = 'inline-flex items-center gap-1.5 font-medium rounded-lg transition-all duration-150 focus:ring-2 focus:ring-offset-1 select-none';
+  const sizes = { sm:'px-2.5 py-1.5 text-xs', md:'px-4 py-2 text-sm', lg:'px-5 py-2.5 text-base', icon:'p-1.5' };
+  const vars = {
+    primary: 'bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-500 shadow-sm',
+    secondary:'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 focus:ring-slate-300 shadow-sm',
+    ghost:   'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 focus:ring-slate-300',
+    danger:  'bg-red-600 hover:bg-red-700 text-white focus:ring-red-500 shadow-sm',
+    success: 'bg-emerald-600 hover:bg-emerald-700 text-white focus:ring-emerald-500 shadow-sm',
+  };
+  const dis = disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'cursor-pointer';
+  return (
+    <button title={title} disabled={disabled} onClick={onClick}
+      className={`${base} ${sizes[sz]} ${vars[v]} ${dis} ${cls}`}>
+      {children}
+    </button>
+  );
+}
+
+function Badge({ color='gray', cls='', children }) {
+  const colors = {
+    gray:   'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300',
+    indigo: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
+    sky:    'bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300',
+    violet: 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300',
+    green:  'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300',
+    amber:  'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300',
+    red:    'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300',
+    blue:   'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
+  };
+  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${colors[color]} ${cls}`}>{children}</span>;
+}
+
+function Card({ cls='', onClick, children }) {
+  const interClass = onClick ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all duration-150' : '';
+  return (
+    <div onClick={onClick}
+      className={`bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm ${interClass} ${cls}`}>
+      {children}
+    </div>
+  );
+}
+
+function Toast({ toast, onDismiss }) {
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(onDismiss, 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+  if (!toast) return null;
+  const icons = { success:'check', error:'alert', info:'info' };
+  const styles = {
+    success:'bg-emerald-600 text-white',
+    error:'bg-red-600 text-white',
+    info:'bg-slate-800 dark:bg-slate-700 text-white',
+  };
+  return (
+    <div className={`fixed top-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-xl fade-up ${styles[toast.type||'info']}`}>
+      <Icon name={icons[toast.type||'info']} size={16} />
+      <span className="text-sm font-medium">{toast.msg}</span>
+      <button onClick={onDismiss} className="ml-1 opacity-75 hover:opacity-100"><Icon name="x" size={14} /></button>
+    </div>
+  );
+}
