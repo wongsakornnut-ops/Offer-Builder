@@ -410,3 +410,1120 @@ function Toast({ toast, onDismiss }) {
     </div>
   );
 }
+
+// ── Star Icon (filled variant) ─────────────────────────────────────────────
+function StarIcon({ filled=false, size=16, cls='' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24"
+      fill={filled ? '#f59e0b' : 'none'} stroke={filled ? '#f59e0b' : 'currentColor'}
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={cls}>
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+    </svg>
+  );
+}
+
+// ── Dashboard ──────────────────────────────────────────────────────────────
+function KPICard({ icon, iconBg, label, value, sub }) {
+  return (
+    <Card cls="p-5">
+      <div className="flex items-start justify-between">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">{label}</p>
+          <p className="text-2xl font-bold mt-1 text-slate-800 dark:text-slate-100">{value}</p>
+          {sub && <p className="text-xs text-slate-400 mt-0.5 truncate">{sub}</p>}
+        </div>
+        <div className={`p-2.5 rounded-xl ${iconBg} flex-shrink-0 ml-3`}>
+          <Icon name={icon} size={18} cls="text-white" />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ProjectCard({ project, onOpen }) {
+  const scenarios = project.scenarios || [];
+  const allMetrics = scenarios.map(s => calcMetrics(s));
+  const bestMargin = allMetrics.length ? Math.max(...allMetrics.map(m => m.netMgn)) : 0;
+  const totalRev = allMetrics.reduce((a, m) => a + m.rev, 0);
+  return (
+    <Card cls="p-5" onClick={onOpen}>
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex-1 min-w-0 mr-3">
+          <h3 className="font-semibold text-sm leading-snug line-clamp-2 text-slate-800 dark:text-slate-100">{project.name}</h3>
+          <p className="text-xs text-slate-400 mt-1 line-clamp-1">{project.description}</p>
+        </div>
+        <Badge color={project.status === 'active' ? 'green' : 'amber'}>{project.status}</Badge>
+      </div>
+      <div className="flex gap-2 mb-3">
+        {scenarios.map((s, i) => (
+          <div key={s.id} className="flex items-center gap-1.5 flex-1 min-w-0">
+            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{background: SCOL[i]?.dot || '#94a3b8'}} />
+            <span className="text-xs text-slate-500 dark:text-slate-400 truncate">{s.subtitle || s.name}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-700">
+        <span className="text-xs text-slate-400 flex items-center gap-1">
+          <Icon name="clock" size={11} />{project.updatedAt}
+        </span>
+        <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+          Rev {currency(totalRev)} · Best {pct(bestMargin)}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+function Dashboard({ projects, packages, onOpenProject, onNewProject, onOpenLibrary, darkMode, setDarkMode }) {
+  const allMetrics = projects.flatMap(p => p.scenarios.map(s => calcMetrics(s)));
+  const totalRevModeled = allMetrics.reduce((a, m) => a + m.rev, 0);
+  const favPackages = packages.filter(p => p.isFavorite);
+  const bestMarginPkg = packages.length ? packages.reduce((best, p) => p.metrics.margin > best.metrics.margin ? p : best, packages[0]) : null;
+  return (
+    <div className="min-h-screen">
+      <nav className="sticky top-0 z-30 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
+              <Icon name="layers" size={15} cls="text-white" />
+            </div>
+            <span className="font-bold text-sm tracking-tight">ScenarioBuilder</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Btn v="ghost" sz="sm" onClick={onOpenLibrary}><Icon name="pkg" size={14} /><span className="hidden sm:inline">Library</span></Btn>
+            <Btn v="ghost" sz="icon" onClick={() => setDarkMode(!darkMode)} title="Toggle dark mode">
+              <Icon name={darkMode ? 'sun' : 'moon'} size={16} />
+            </Btn>
+          </div>
+        </div>
+      </nav>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard</h1>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">Compare scenarios, evaluate feasibility, build packages.</p>
+          </div>
+          <Btn v="primary" onClick={onNewProject} cls="self-start sm:self-auto">
+            <Icon name="plus" size={16} />New Comparison
+          </Btn>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <KPICard icon="layers" iconBg="bg-indigo-500" label="Projects" value={projects.length} sub={`${projects.filter(p=>p.status==='active').length} active`} />
+          <KPICard icon="pkg" iconBg="bg-violet-500" label="Packages" value={packages.length} sub={`${favPackages.length} favorited`} />
+          <KPICard icon="trendUp" iconBg="bg-emerald-500" label="Best Margin" value={bestMarginPkg ? pct(bestMarginPkg.metrics.margin) : '—'} sub={bestMarginPkg?.name} />
+          <KPICard icon="dollar" iconBg="bg-amber-500" label="Revenue Modeled" value={currency(totalRevModeled)} sub="across all scenarios" />
+        </div>
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-slate-800 dark:text-slate-100">Recent Comparisons</h2>
+            <Btn v="ghost" sz="sm" onClick={onNewProject}><Icon name="plus" size={13} />New</Btn>
+          </div>
+          {projects.length === 0 ? (
+            <Card cls="p-12 text-center">
+              <Icon name="bar" size={40} cls="mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+              <p className="font-medium text-slate-500 mb-1">No comparisons yet</p>
+              <p className="text-sm text-slate-400">Create your first scenario comparison to get started.</p>
+              <Btn v="primary" cls="mt-4" onClick={onNewProject}><Icon name="plus" size={14} />New Comparison</Btn>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {projects.map(p => <ProjectCard key={p.id} project={p} onOpen={() => onOpenProject(p.id)} />)}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-slate-800 dark:text-slate-100">Favorite Packages</h2>
+            <Btn v="ghost" sz="sm" onClick={onOpenLibrary}><span>View all</span><Icon name="arrowRight" size={13} /></Btn>
+          </div>
+          {favPackages.length === 0 ? (
+            <Card cls="p-8 text-center">
+              <Icon name="star" size={32} cls="mx-auto text-slate-300 dark:text-slate-600 mb-2" />
+              <p className="text-sm text-slate-400">No favorite packages yet. Star packages from the library.</p>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {favPackages.map(pkg => (
+                <Card key={pkg.id} cls="p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm truncate">{pkg.name}</p>
+                      <p className="text-xs text-slate-400">{pkg.category}</p>
+                    </div>
+                    <StarIcon filled size={15} cls="ml-2 flex-shrink-0" />
+                  </div>
+                  <div className="flex gap-3 text-xs mt-3">
+                    <span className="text-slate-400">Rev <span className="font-semibold text-slate-700 dark:text-slate-200">{currency(pkg.metrics.rev)}</span></span>
+                    <span className="text-slate-400">Profit <span className={`font-semibold ${pkg.metrics.profit>=0?'text-emerald-600':'text-red-500'}`}>{currency(pkg.metrics.profit)}</span></span>
+                    <span className="text-slate-400">Mgn <span className={`font-semibold ${pkg.metrics.margin>=0?'text-emerald-600':'text-red-500'}`}>{pct(pkg.metrics.margin)}</span></span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {pkg.tags.slice(0,3).map(t => <Badge key={t} color="gray">{t}</Badge>)}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Save Package Modal ─────────────────────────────────────────────────────
+function SavePackageModal({ scenario, onSave, onClose }) {
+  const m = useMemo(() => calcMetrics(scenario), [scenario]);
+  const [form, setForm] = useState({
+    name: scenario.subtitle || scenario.name, category:'Events',
+    tags:'', description:'', saveType:'package',
+    incAssumptions:true, incItems:true, incRevenue:true, incNotes:true,
+  });
+  const set = (k,v) => setForm(f => ({...f,[k]:v}));
+  const CATS = ['Events','SaaS','Marketing','Food & Beverage','Professional Services','Retail','Construction','Other'];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto scale-in">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center"><Icon name="pkg" size={15} cls="text-white" /></div>
+            <div><h2 className="font-semibold text-sm">Save as Package</h2><p className="text-xs text-slate-400">From: {scenario.subtitle||scenario.name}</p></div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><Icon name="x" size={18} /></button>
+        </div>
+        <div className="mx-6 mt-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-700/50 grid grid-cols-3 gap-3 text-center">
+          {[['Revenue',currency(m.rev),'text-slate-800 dark:text-slate-100'],['Net Profit',currency(m.net),m.net>=0?'text-emerald-600':'text-red-500'],['Margin',pct(m.netMgn),m.netMgn>=0?'text-emerald-600':'text-red-500']].map(([l,v,c]) => (
+            <div key={l}><p className="text-xs text-slate-400">{l}</p><p className={`font-semibold text-sm ${c}`}>{v}</p></div>
+          ))}
+        </div>
+        <div className="px-6 pb-6 mt-4 space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Package Name *</label>
+            <input type="text" value={form.name} onChange={e=>set('name',e.target.value)} placeholder="e.g. Virtual Conference Template"
+              className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Category</label>
+              <select value={form.category} onChange={e=>set('category',e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 outline-none focus:ring-2 focus:ring-indigo-500">
+                {CATS.map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Type</label>
+              <select value={form.saveType} onChange={e=>set('saveType',e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="package">Package</option>
+                <option value="template">Template</option>
+                <option value="favorite">Favorite</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Tags <span className="text-slate-400 font-normal">(comma-separated)</span></label>
+            <input type="text" value={form.tags} onChange={e=>set('tags',e.target.value)} placeholder="virtual, conference, 500pax"
+              className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Description</label>
+            <textarea value={form.description} onChange={e=>set('description',e.target.value)} rows={3} placeholder="Describe this package..."
+              className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-2">Include in package</label>
+            <div className="space-y-2">
+              {[['incAssumptions','Assumptions'],['incItems','Line Items & Categories'],['incRevenue','Revenue Inputs'],['incNotes','Notes']].map(([k,l])=>(
+                <label key={k} className="flex items-center gap-2 cursor-pointer text-sm">
+                  <input type="checkbox" checked={form[k]} onChange={e=>set(k,e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                  {l}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <Btn v="secondary" sz="md" cls="flex-1" onClick={onClose}>Cancel</Btn>
+            <Btn v="primary" sz="md" cls="flex-1" disabled={!form.name.trim()} onClick={()=>onSave(form)}>
+              <Icon name="pkg" size={14} />Save Package
+            </Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Assumptions Panel ──────────────────────────────────────────────────────
+function AssumptionsPanel({ scenarios, onUpdate, onAdd, onRemove }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card cls="mb-4">
+      <button onClick={()=>setOpen(o=>!o)} className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 rounded-xl transition-colors">
+        <span className="flex items-center gap-2 font-medium text-sm">
+          <Icon name="info" size={15} cls="text-slate-400" />Assumptions
+          <Badge color="gray">{scenarios.reduce((a,s)=>a+(s.assumptions||[]).length,0)} rows</Badge>
+        </span>
+        <Icon name={open?'chevUp':'chevDown'} size={16} cls="text-slate-400" />
+      </button>
+      {open && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 px-4 pb-4 border-t border-slate-100 dark:border-slate-700 pt-4">
+          {scenarios.map((s,i) => (
+            <div key={s.id}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-5 h-5 rounded-full text-white text-xs font-bold flex items-center justify-center flex-shrink-0" style={{background:SCOL[i]?.dot}}>{SCOL[i]?.label}</span>
+                <span className="text-sm font-medium truncate">{s.subtitle||s.name}</span>
+              </div>
+              <div className="space-y-1">
+                {(s.assumptions||[]).map(a=>(
+                  <div key={a.id} className="flex items-center gap-1 group text-xs">
+                    <input value={a.label} onChange={e=>onUpdate(s.id,a.id,'label',e.target.value)}
+                      className="cell-input text-slate-500 w-20 flex-shrink-0" placeholder="Key…" />
+                    <span className="text-slate-300">:</span>
+                    <input value={a.value} onChange={e=>onUpdate(s.id,a.id,'value',e.target.value)}
+                      className="cell-input flex-1 font-medium" placeholder="Value…" />
+                    <button onClick={()=>onRemove(s.id,a.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500">
+                      <Icon name="x" size={11} />
+                    </button>
+                  </div>
+                ))}
+                <button onClick={()=>onAdd(s.id)} className="flex items-center gap-1 text-xs text-slate-400 hover:text-indigo-600 py-0.5 transition-colors">
+                  <Icon name="plus" size={11} />Add row
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ── Line Item Row ──────────────────────────────────────────────────────────
+function LineItemRow({ item, onUpdate, onRemove }) {
+  return (
+    <div className="flex items-center gap-1 py-1 group/item">
+      <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
+        className="cell-input flex-1 min-w-0 text-sm text-slate-700 dark:text-slate-200" placeholder="Item name…" />
+      <span className="text-slate-400 text-xs flex-shrink-0">$</span>
+      <input type="number" value={item.value||''} onChange={e=>onUpdate('value',Number(e.target.value)||0)}
+        className="cell-input w-24 text-right text-sm font-mono" placeholder="0" />
+      <button onClick={onRemove} className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
+        <Icon name="x" size={13} />
+      </button>
+    </div>
+  );
+}
+
+// ── Category Group ─────────────────────────────────────────────────────────
+function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem, onRemoveItem }) {
+  const [open, setOpen] = useState(true);
+  const sub = (cat.items||[]).reduce((a,it)=>a+(Number(it.value)||0),0);
+  return (
+    <div className="mb-2">
+      <div className="flex items-center gap-1 py-1 group/cat">
+        <button onClick={()=>setOpen(o=>!o)} className="text-slate-400 hover:text-slate-600 flex-shrink-0">
+          <Icon name={open?'chevDown':'chevRight'} size={13} />
+        </button>
+        <input value={cat.name} onChange={e=>onUpdateCat('name',e.target.value)}
+          className="cell-input flex-1 min-w-0 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" />
+        <button onClick={()=>onUpdateCat('isDirectCost',!cat.isDirectCost)} title={cat.isDirectCost?'Direct cost':'Overhead — click to toggle'}
+          className={`text-xs px-1.5 py-0.5 rounded font-medium transition-colors flex-shrink-0 ${cat.isDirectCost?'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300':'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400'}`}>
+          {cat.isDirectCost?'Direct':'OH'}
+        </button>
+        <span className="text-xs font-mono font-semibold text-slate-500 ml-1 flex-shrink-0">{currency(sub)}</span>
+        <button onClick={onRemoveCat} className="opacity-0 group-hover/cat:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
+          <Icon name="x" size={12} />
+        </button>
+      </div>
+      {open && (
+        <div className="pl-4 border-l-2 border-slate-100 dark:border-slate-700 ml-2">
+          {(cat.items||[]).map(item=>(
+            <LineItemRow key={item.id} item={item}
+              onUpdate={(f,v)=>onUpdateItem(item.id,f,v)}
+              onRemove={()=>onRemoveItem(item.id)} />
+          ))}
+          <button onClick={onAddItem} className="flex items-center gap-1 text-xs text-slate-400 hover:text-indigo-600 py-1 mt-0.5 transition-colors">
+            <Icon name="plus" size={11} />Add item
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Scenario Card ──────────────────────────────────────────────────────────
+function ScenarioCard({ scenario, ci, onUpdate, onUpdateItem, onAddItem, onRemoveItem, onAddCat, onRemoveCat, onUpdateCat, onSavePackage }) {
+  const col = SCOL[ci] || SCOL[0];
+  const m = useMemo(()=>calcMetrics(scenario),[scenario]);
+  return (
+    <div className={`rounded-xl border-2 ${col.border} bg-white dark:bg-slate-800 shadow-sm flex flex-col`}>
+      <div className={`${col.lightBg} rounded-t-xl px-4 py-3 border-b ${col.border}`}>
+        <div className="flex items-center gap-2 mb-1">
+          <span className={`w-6 h-6 rounded-full ${col.bg} text-white text-xs font-bold flex items-center justify-center flex-shrink-0`}>{col.label}</span>
+          <input value={scenario.name} onChange={e=>onUpdate('name',e.target.value)}
+            className={`cell-input font-semibold text-sm ${col.text} flex-1`} />
+        </div>
+        <input value={scenario.subtitle||''} onChange={e=>onUpdate('subtitle',e.target.value)}
+          className="cell-input text-xs text-slate-500 dark:text-slate-400 w-full" placeholder="Add subtitle…" />
+      </div>
+      <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Revenue</p>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-xs text-slate-400 block mb-0.5">Units</label>
+            <input type="number" value={scenario.units||''} onChange={e=>onUpdate('units',Number(e.target.value)||0)}
+              className="cell-input font-mono text-right w-full text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 block mb-0.5">Price/unit ($)</label>
+            <input type="number" value={scenario.revenuePerUnit||''} onChange={e=>onUpdate('revenuePerUnit',Number(e.target.value)||0)}
+              className="cell-input font-mono text-right w-full text-sm" />
+          </div>
+        </div>
+        <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+          <span className="text-xs text-slate-500">Total Revenue</span>
+          <span className={`font-bold text-sm ${col.text}`}>{currency(m.rev)}</span>
+        </div>
+      </div>
+      <div className="px-4 py-3 flex-1">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Cost Items</p>
+        {(scenario.categories||[]).map(cat=>(
+          <CategoryGroup key={cat.id} cat={cat}
+            onUpdateCat={(f,v)=>onUpdateCat(cat.id,f,v)}
+            onRemoveCat={()=>onRemoveCat(cat.id)}
+            onUpdateItem={(iid,f,v)=>onUpdateItem(cat.id,iid,f,v)}
+            onAddItem={()=>onAddItem(cat.id)}
+            onRemoveItem={(iid)=>onRemoveItem(cat.id,iid)} />
+        ))}
+        <button onClick={onAddCat} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-indigo-600 py-1 mt-1 transition-colors">
+          <Icon name="plus" size={13} />Add category
+        </button>
+      </div>
+      <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 rounded-b-xl">
+        <div className="space-y-1 text-sm mb-3">
+          {[['Total Cost',currency(m.tot),''],['Gross Profit',currency(m.gross),m.gross>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'],['Net Profit',currency(m.net),m.net>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'],['Net Margin',pct(m.netMgn),m.netMgn>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500']].map(([l,v,c])=>(
+            <div key={l} className="flex justify-between">
+              <span className="text-slate-500 text-xs">{l}</span>
+              <span className={`font-mono font-semibold text-xs ${c}`}>{v}</span>
+            </div>
+          ))}
+          <div className="flex justify-between pt-1 border-t border-slate-200 dark:border-slate-700">
+            <span className="text-xs text-slate-400">Cost/unit · Profit/unit</span>
+            <span className="text-xs font-mono text-slate-500">{currency(m.cpu)} · {currency(m.ppu)}</span>
+          </div>
+        </div>
+        <button onClick={onSavePackage} className="w-full flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+          <Icon name="pkg" size={13} />Save as Package
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Comparison Table ───────────────────────────────────────────────────────
+function ComparisonTable({ scenarios }) {
+  const metrics = scenarios.map(s => calcMetrics(s));
+  const rows = [
+    {key:'rev',    label:'Total Revenue',   vals:metrics.map(m=>m.rev),      fmt:currency, best:'high'},
+    {key:'tot',    label:'Total Cost',      vals:metrics.map(m=>m.tot),      fmt:currency, best:'low'},
+    {key:'direct', label:'Direct Costs',    vals:metrics.map(m=>m.direct),   fmt:currency, best:'low'},
+    {key:'gross',  label:'Gross Profit',    vals:metrics.map(m=>m.gross),    fmt:currency, best:'high'},
+    {key:'net',    label:'Net Profit',      vals:metrics.map(m=>m.net),      fmt:currency, best:'high'},
+    {key:'grossMgn',label:'Gross Margin',   vals:metrics.map(m=>m.grossMgn), fmt:pct,      best:'high'},
+    {key:'netMgn', label:'Net Margin',      vals:metrics.map(m=>m.netMgn),   fmt:pct,      best:'high'},
+    {key:'cpu',    label:'Cost / Unit',     vals:metrics.map(m=>m.cpu),      fmt:currency, best:'low'},
+    {key:'ppu',    label:'Profit / Unit',   vals:metrics.map(m=>m.ppu),      fmt:currency, best:'high'},
+  ];
+  const getBest = (vals, dir) => dir==='high' ? vals.indexOf(Math.max(...vals)) : vals.indexOf(Math.min(...vals));
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 dark:border-slate-700">
+            <th className="text-left py-3 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Metric</th>
+            {scenarios.map((s,i)=>(
+              <th key={s.id} className="text-right py-3 px-4 font-medium">
+                <div className="flex items-center justify-end gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{background:SCOL[i]?.dot}} />
+                  <span className="text-xs">{s.subtitle||s.name}</span>
+                </div>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row=>{
+            const bi = getBest(row.vals, row.best);
+            return (
+              <tr key={row.key} className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <td className="py-2.5 px-4 text-xs text-slate-500 dark:text-slate-400">{row.label}</td>
+                {row.vals.map((v,i)=>(
+                  <td key={i} className={`py-2.5 px-4 text-right font-semibold text-xs font-mono ${i===bi?'text-emerald-600 dark:text-emerald-400':v<0?'text-red-500':''}`}>
+                    {row.fmt(v)}{i===bi&&<span className="ml-1">★</span>}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Variance Section ───────────────────────────────────────────────────────
+function VarianceSection({ scenarios }) {
+  const metrics = scenarios.map(s => calcMetrics(s));
+  const pairs = [[0,1],[1,2],[0,2]].filter(([a,b])=>scenarios[a]&&scenarios[b]);
+  const mkeys = [{key:'rev',label:'Revenue',fmt:currency},{key:'net',label:'Net Profit',fmt:currency},{key:'netMgn',label:'Net Margin',fmt:pct},{key:'ppu',label:'Profit/Unit',fmt:currency}];
+  return (
+    <div>
+      <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><Icon name="activity" size={15} cls="text-slate-400" />Variance Analysis</h3>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {pairs.map(([ai,bi])=>{
+          const mA=metrics[ai], mB=metrics[bi], sA=scenarios[ai], sB=scenarios[bi];
+          const label=`${sA.subtitle||sA.name} vs ${sB.subtitle||sB.name}`;
+          return (
+            <Card key={label} cls="p-4">
+              <div className="flex items-center gap-2 mb-3 text-xs font-semibold">
+                <span className="w-2 h-2 rounded-full" style={{background:SCOL[ai]?.dot}} />
+                <span className="text-slate-600 dark:text-slate-300 truncate">{label}</span>
+                <span className="w-2 h-2 rounded-full" style={{background:SCOL[bi]?.dot}} />
+              </div>
+              <div className="space-y-2">
+                {mkeys.map(({key,label:ml,fmt})=>{
+                  const diff = mB[key]-mA[key];
+                  const diffPct = mA[key]!==0 ? (diff/Math.abs(mA[key]))*100 : 0;
+                  const pos = diff>0;
+                  return (
+                    <div key={key} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500">{ml}</span>
+                      <span className={`flex items-center gap-1 font-semibold ${pos?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>
+                        <Icon name={pos?'trendUp':'trendDown'} size={11} />
+                        {fmt(Math.abs(diff))} ({Math.abs(diffPct).toFixed(0)}%)
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── AI Insight Panel ───────────────────────────────────────────────────────
+function AIInsightPanel({ scenarios }) {
+  const metrics = scenarios.map(s=>calcMetrics(s));
+  const bestNet = metrics.reduce((b,m,i)=>m.net>b.val?{val:m.net,i}:b,{val:-Infinity,i:0});
+  const bestMgn = metrics.reduce((b,m,i)=>m.netMgn>b.val?{val:m.netMgn,i}:b,{val:-Infinity,i:0});
+  const lowestCost = metrics.reduce((b,m,i)=>m.tot<b.val?{val:m.tot,i}:b,{val:Infinity,i:0});
+  const insights = [
+    {icon:'trendUp',color:'text-emerald-500',title:'Profitability Leader',desc:`${scenarios[bestNet.i]?.subtitle||scenarios[bestNet.i]?.name} delivers the highest net profit at ${currency(bestNet.val)} (${pct(metrics[bestNet.i]?.netMgn)} margin). This scenario offers the strongest financial return.`},
+    {icon:'zap',color:'text-amber-500',title:'Cost Efficiency',desc:`${scenarios[lowestCost.i]?.subtitle||scenarios[lowestCost.i]?.name} has the lowest total cost at ${currency(lowestCost.val)}, making it the safest choice if budget constraints are a primary concern.`},
+    {icon:'activity',color:'text-indigo-500',title:'Margin Optimisation',desc:`${scenarios[bestMgn.i]?.subtitle||scenarios[bestMgn.i]?.name} achieves the best net margin at ${pct(metrics[bestMgn.i]?.netMgn)}. Higher margins indicate stronger pricing power and operational efficiency.`},
+  ];
+  return (
+    <div className="p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center">
+            <Icon name="sparkle" size={15} cls="text-white" />
+          </div>
+          <div><p className="font-semibold text-sm">AI Scenario Insights</p><p className="text-xs text-slate-400">Auto-generated from your data</p></div>
+        </div>
+        <Badge color="amber">Preview</Badge>
+      </div>
+      <div className="space-y-3">
+        {insights.map(ins=>(
+          <div key={ins.title} className="flex gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700">
+            <Icon name={ins.icon} size={16} cls={`${ins.color} mt-0.5 flex-shrink-0`} />
+            <div><p className="text-sm font-medium mb-0.5">{ins.title}</p><p className="text-xs text-slate-400 leading-relaxed">{ins.desc}</p></div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 p-3 rounded-xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 text-center">
+        <p className="text-xs text-indigo-600 dark:text-indigo-400">Connect Claude API to unlock deeper analysis, risk modelling, and optimisation suggestions.</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Scenario Compare Screen ────────────────────────────────────────────────
+function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, setDarkMode }) {
+  const [mobileTab, setMobileTab] = useState(0);
+  const [cmpSection, setCmpSection] = useState('table');
+  const scenarios = project.scenarios || [];
+
+  const makeCardHandlers = (s) => ({
+    onUpdate:      (f,v)     => handlers.updScenario(s.id,f,v),
+    onUpdateItem:  (c,i,f,v) => handlers.updItem(s.id,c,i,f,v),
+    onAddItem:     (c)       => handlers.addItem(s.id,c),
+    onRemoveItem:  (c,i)     => handlers.remItem(s.id,c,i),
+    onAddCat:      ()        => handlers.addCat(s.id),
+    onRemoveCat:   (c)       => handlers.remCat(s.id,c),
+    onUpdateCat:   (c,f,v)   => handlers.updCat(s.id,c,f,v),
+    onSavePackage: ()        => onSavePackage(s),
+  });
+
+  return (
+    <div className="min-h-screen">
+      <div className="sticky top-0 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 px-4 sm:px-6">
+        <div className="max-w-screen-xl mx-auto flex items-center gap-3 h-14">
+          <button onClick={onBack} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            <Icon name="arrowLeft" size={18} />
+          </button>
+          <input value={project.name} onChange={e=>handlers.updProject('name',e.target.value)}
+            className="cell-input flex-1 min-w-0 font-semibold text-sm" />
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Btn v="secondary" sz="sm" onClick={()=>{}} title="Export (placeholder)">
+              <Icon name="download" size={14} /><span className="hidden sm:inline">Export</span>
+            </Btn>
+            <Btn v="primary" sz="sm" onClick={handlers.saveDraft}>
+              <Icon name="save" size={14} /><span className="hidden sm:inline">Save</span>
+            </Btn>
+            <Btn v="ghost" sz="icon" onClick={()=>setDarkMode(!darkMode)}>
+              <Icon name={darkMode?'sun':'moon'} size={16} />
+            </Btn>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
+        <AssumptionsPanel scenarios={scenarios}
+          onUpdate={handlers.updAssumption}
+          onAdd={handlers.addAssumption}
+          onRemove={handlers.remAssumption} />
+
+        {/* Mobile scenario tabs */}
+        <div className="flex lg:hidden border-b border-slate-200 dark:border-slate-700 mb-4 overflow-x-auto -mx-4 sm:-mx-6 px-4 sm:px-6">
+          {scenarios.map((s,i)=>(
+            <button key={s.id} onClick={()=>setMobileTab(i)}
+              className={`px-4 py-2.5 text-xs font-medium border-b-2 whitespace-nowrap flex items-center gap-1.5 transition-colors flex-shrink-0 ${mobileTab===i?'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400':'border-transparent text-slate-500'}`}>
+              <span className="w-4 h-4 rounded-full text-white text-xs flex items-center justify-center font-bold" style={{background:SCOL[i]?.dot}}>{SCOL[i]?.label}</span>
+              <span className="max-w-24 truncate">{s.subtitle||s.name}</span>
+            </button>
+          ))}
+          <button onClick={()=>setMobileTab(3)}
+            className={`px-4 py-2.5 text-xs font-medium border-b-2 whitespace-nowrap flex items-center gap-1.5 flex-shrink-0 ${mobileTab===3?'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400':'border-transparent text-slate-500'}`}>
+            <Icon name="bar" size={13} />Compare
+          </button>
+        </div>
+
+        {/* Desktop: 3-column scenario cards */}
+        <div className="hidden lg:grid grid-cols-3 gap-4 mb-6">
+          {scenarios.map((s,i)=>(
+            <ScenarioCard key={s.id} scenario={s} ci={i} {...makeCardHandlers(s)} />
+          ))}
+        </div>
+
+        {/* Mobile: single scenario OR compare tab */}
+        <div className="lg:hidden mb-4">
+          {mobileTab < 3 && scenarios[mobileTab] && (
+            <ScenarioCard scenario={scenarios[mobileTab]} ci={mobileTab} {...makeCardHandlers(scenarios[mobileTab])} />
+          )}
+          {mobileTab === 3 && (
+            <div className="space-y-4">
+              <Card cls="overflow-hidden"><ComparisonTable scenarios={scenarios} /></Card>
+              <VarianceSection scenarios={scenarios} />
+              <Card><AIInsightPanel scenarios={scenarios} /></Card>
+            </div>
+          )}
+        </div>
+
+        {/* Desktop: comparison sections */}
+        <div className="hidden lg:block">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold flex items-center gap-2 text-sm"><Icon name="bar" size={16} cls="text-slate-400" />Scenario Comparison</h2>
+            <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
+              {[['table','Summary'],['variance','Variance'],['ai','AI Insights']].map(([k,l])=>(
+                <button key={k} onClick={()=>setCmpSection(k)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${cmpSection===k?'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 shadow-sm':'text-slate-500 hover:text-slate-700'}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Card cls="overflow-hidden">
+            {cmpSection==='table' && <ComparisonTable scenarios={scenarios} />}
+            {cmpSection==='variance' && <div className="p-4"><VarianceSection scenarios={scenarios} /></div>}
+            {cmpSection==='ai' && <AIInsightPanel scenarios={scenarios} />}
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Package Library ────────────────────────────────────────────────────────
+function PackageCard({ pkg, onToggleFav, onUse, onClone }) {
+  const catColors = {'Events':'indigo','SaaS':'sky','Marketing':'violet','Food & Beverage':'amber','Professional Services':'green'};
+  const typeColors = {package:'blue',template:'violet',favorite:'amber'};
+  return (
+    <Card cls="p-4 flex flex-col">
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex-1 min-w-0 mr-2">
+          <h3 className="font-semibold text-sm leading-snug">{pkg.name}</h3>
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            <Badge color={catColors[pkg.category]||'gray'}>{pkg.category}</Badge>
+            <Badge color={typeColors[pkg.saveType]||'gray'}>{pkg.saveType}</Badge>
+          </div>
+        </div>
+        <button onClick={onToggleFav} className="p-1 transition-colors flex-shrink-0">
+          <StarIcon filled={pkg.isFavorite} size={16} cls={pkg.isFavorite?'':'text-slate-300 hover:text-amber-400'} />
+        </button>
+      </div>
+      <p className="text-xs text-slate-400 line-clamp-2 mb-3 flex-1">{pkg.description}</p>
+      <div className="flex gap-2 text-xs mb-3">
+        <span className="flex-1 text-slate-400">Rev <span className="font-semibold text-slate-700 dark:text-slate-200">{currency(pkg.metrics.rev)}</span></span>
+        <span className="flex-1 text-slate-400">Profit <span className={`font-semibold ${pkg.metrics.profit>=0?'text-emerald-600':'text-red-500'}`}>{currency(pkg.metrics.profit)}</span></span>
+        <span className="flex-1 text-slate-400">Mgn <span className={`font-semibold ${pkg.metrics.margin>=0?'text-emerald-600':'text-red-500'}`}>{pct(pkg.metrics.margin)}</span></span>
+      </div>
+      <div className="flex flex-wrap gap-1 mb-3">
+        {(pkg.tags||[]).slice(0,3).map(t=><Badge key={t} color="gray">{t}</Badge>)}
+      </div>
+      <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+        <Btn v="ghost" sz="sm" cls="flex-1 justify-center text-xs" onClick={onUse}><Icon name="arrowRight" size={12} />Use</Btn>
+        <Btn v="ghost" sz="sm" cls="flex-1 justify-center text-xs" onClick={onClone}><Icon name="copy" size={12} />Clone</Btn>
+        <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
+        <span className="text-xs text-slate-400 whitespace-nowrap">{pkg.usageCount}× used</span>
+      </div>
+    </Card>
+  );
+}
+
+function PackageLibrary({ packages, onBack, onToggleFav, onUse, onClone, darkMode, setDarkMode }) {
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [catFilter, setCatFilter] = useState('all');
+  const cats = ['all', ...Array.from(new Set(packages.map(p=>p.category)))];
+  const filtered = packages.filter(p => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || p.name.toLowerCase().includes(q) || (p.description||'').toLowerCase().includes(q) || (p.tags||[]).some(t=>t.includes(q));
+    const matchType = typeFilter==='all' || (typeFilter==='favorite'?p.isFavorite:p.saveType===typeFilter);
+    const matchCat = catFilter==='all' || p.category===catFilter;
+    return matchSearch && matchType && matchCat;
+  });
+  return (
+    <div className="min-h-screen">
+      <nav className="sticky top-0 z-30 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center gap-3 h-14">
+          <button onClick={onBack} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800">
+            <Icon name="arrowLeft" size={18} />
+          </button>
+          <h1 className="font-bold text-sm">Package Library</h1>
+          <Badge color="gray" cls="ml-1">{packages.length} packages</Badge>
+          <div className="ml-auto flex items-center gap-2">
+            <Btn v="ghost" sz="icon" onClick={()=>setDarkMode(!darkMode)}>
+              <Icon name={darkMode?'sun':'moon'} size={16} />
+            </Btn>
+          </div>
+        </div>
+      </nav>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+        <div className="flex flex-col sm:flex-row gap-3 mb-5">
+          <div className="relative flex-1">
+            <Icon name="search" size={15} cls="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search packages…"
+              className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {['all','package','template','favorite'].map(f=>(
+              <button key={f} onClick={()=>setTypeFilter(f)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg capitalize transition-colors ${typeFilter===f?'bg-indigo-600 text-white':'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700'}`}>
+                {f==='all'?'All Types':f}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-2 mb-5">
+          {cats.map(c=>(
+            <button key={c} onClick={()=>setCatFilter(c)}
+              className={`px-3 py-1 text-xs font-medium rounded-full whitespace-nowrap flex-shrink-0 transition-colors ${catFilter===c?'bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900':'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'}`}>
+              {c==='all'?'All Categories':c}
+            </button>
+          ))}
+        </div>
+        {filtered.length===0 ? (
+          <div className="text-center py-16">
+            <Icon name="search" size={40} cls="mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+            <p className="font-medium text-slate-500 mb-1">No packages found</p>
+            <p className="text-sm text-slate-400">Try adjusting your search or filters.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {filtered.map(pkg=>(
+              <PackageCard key={pkg.id} pkg={pkg}
+                onToggleFav={()=>onToggleFav(pkg.id)}
+                onUse={()=>onUse(pkg)}
+                onClone={()=>onClone(pkg)} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── APP ROOT ────────────────────────────────────────────────────────────────
+function App() {
+  const [projects, setProjects]             = React.useState(INIT_PROJECTS);
+  const [packages, setPackages]             = React.useState(INIT_PACKAGES);
+  const [screen, setScreen]                 = React.useState('dashboard');
+  const [activeProjectId, setActiveProjectId] = React.useState(null);
+  const [darkMode, setDarkMode]             = React.useState(false);
+  const [toast, setToast]                   = React.useState(null);
+  const [saveModal, setSaveModal]           = React.useState(null);
+
+  React.useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+  }, [darkMode]);
+
+  const showToast = (msg, type='success') => {
+    setToast({ msg, type, id: uid() });
+    setTimeout(() => setToast(null), 3200);
+  };
+
+  // ── Project helpers ──────────────────────────────────────────────────────
+  const activeProject = projects.find(p => p.id === activeProjectId) || null;
+
+  const openProject = (id) => {
+    setActiveProjectId(id);
+    setScreen('compare');
+  };
+
+  const createProject = () => {
+    const mkScenario = (label) => ({
+      id: uid(), label,
+      units: 0, pricePerUnit: 0,
+      assumptions: [],
+      categories: [
+        { id: uid(), name: 'Direct Costs', isDirect: true,
+          items: [{ id: uid(), name: 'Item 1', value: 0 }] },
+        { id: uid(), name: 'Overhead',     isDirect: false,
+          items: [{ id: uid(), name: 'Item 1', value: 0 }] },
+      ],
+    });
+    const proj = {
+      id: uid(),
+      name: 'New Project',
+      status: 'draft',
+      updatedAt: new Date().toISOString(),
+      scenarios: [mkScenario('Scenario A'), mkScenario('Scenario B'), mkScenario('Scenario C')],
+    };
+    setProjects(prev => [proj, ...prev]);
+    openProject(proj.id);
+  };
+
+  // ── Generic project field update ────────────────────────────────────────
+  const updProject = (id, field, value) => {
+    setProjects(prev => prev.map(p =>
+      p.id !== id ? p : { ...p, [field]: value, updatedAt: new Date().toISOString() }
+    ));
+  };
+
+  const saveDraft = (id) => {
+    setProjects(prev => prev.map(p =>
+      p.id !== id ? p : { ...p, status: 'draft', updatedAt: new Date().toISOString() }
+    ));
+    showToast('Draft saved');
+  };
+
+  // ── Scenario-level updates ───────────────────────────────────────────────
+  const updScenario = (projectId, scenarioId, field, value) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        updatedAt: new Date().toISOString(),
+        scenarios: p.scenarios.map(s =>
+          s.id !== scenarioId ? s : { ...s, [field]: value }
+        ),
+      };
+    }));
+  };
+
+  // ── Assumption updates ───────────────────────────────────────────────────
+  const updAssumption = (projectId, scenarioId, asmIdx, field, value) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          const assumptions = s.assumptions.map((a, i) =>
+            i !== asmIdx ? a : { ...a, [field]: value }
+          );
+          return { ...s, assumptions };
+        }),
+      };
+    }));
+  };
+
+  const addAssumption = (projectId, scenarioId) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return { ...s, assumptions: [...(s.assumptions||[]), { id: uid(), key: 'Assumption', value: '' }] };
+        }),
+      };
+    }));
+  };
+
+  const remAssumption = (projectId, scenarioId, asmIdx) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return { ...s, assumptions: s.assumptions.filter((_,i) => i !== asmIdx) };
+        }),
+      };
+    }));
+  };
+
+  // ── Category updates ─────────────────────────────────────────────────────
+  const addCat = (projectId, scenarioId) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          const newCat = { id: uid(), name: 'New Category', isDirect: false, items: [{ id: uid(), name: 'Item 1', value: 0 }] };
+          return { ...s, categories: [...s.categories, newCat] };
+        }),
+      };
+    }));
+  };
+
+  const remCat = (projectId, scenarioId, catId) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return { ...s, categories: s.categories.filter(c => c.id !== catId) };
+        }),
+      };
+    }));
+  };
+
+  const updCat = (projectId, scenarioId, catId, field, value) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return { ...s, categories: s.categories.map(c => c.id !== catId ? c : { ...c, [field]: value }) };
+        }),
+      };
+    }));
+  };
+
+  // ── Line-item updates ────────────────────────────────────────────────────
+  const addItem = (projectId, scenarioId, catId) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return {
+            ...s,
+            categories: s.categories.map(c => {
+              if (c.id !== catId) return c;
+              return { ...c, items: [...c.items, { id: uid(), name: 'New Item', value: 0 }] };
+            }),
+          };
+        }),
+      };
+    }));
+  };
+
+  const remItem = (projectId, scenarioId, catId, itemId) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return {
+            ...s,
+            categories: s.categories.map(c => {
+              if (c.id !== catId) return c;
+              return { ...c, items: c.items.filter(it => it.id !== itemId) };
+            }),
+          };
+        }),
+      };
+    }));
+  };
+
+  const updItem = (projectId, scenarioId, catId, itemId, field, value) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return {
+            ...s,
+            categories: s.categories.map(c => {
+              if (c.id !== catId) return c;
+              return { ...c, items: c.items.map(it => it.id !== itemId ? it : { ...it, [field]: value }) };
+            }),
+          };
+        }),
+      };
+    }));
+  };
+
+  // ── Package handlers ──────────────────────────────────────────────────────
+  const handleSavePackage = (scenario) => setSaveModal(scenario);
+
+  const handleSavePackageSubmit = (form) => {
+    const scenario = saveModal;
+    const m = calcMetrics(scenario);
+    const pkg = {
+      id: uid(),
+      name: form.name,
+      category: form.category,
+      type: form.type,
+      description: form.description,
+      tags: form.tags.split(',').map(t=>t.trim()).filter(Boolean),
+      favorite: false,
+      metrics: { revenue: m.rev, cost: m.tot, profit: m.net, margin: m.netMgn },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      scenarios: form.includeScenario ? [scenario] : [],
+      assumptions: form.includeAssumptions ? scenario.assumptions : [],
+    };
+    setPackages(prev => [pkg, ...prev]);
+    setSaveModal(null);
+    showToast(`"${form.name}" saved to Package Library`);
+  };
+
+  const toggleFavPackage = (pkgId) => {
+    setPackages(prev => prev.map(p => p.id !== pkgId ? p : { ...p, favorite: !p.favorite }));
+  };
+
+  const usePackage = (pkg) => {
+    showToast(`Package "${pkg.name}" ready to apply`);
+  };
+
+  const clonePackage = (pkg) => {
+    const cloned = { ...pkg, id: uid(), name: pkg.name + ' (Copy)', favorite: false, createdAt: new Date().toISOString() };
+    setPackages(prev => [cloned, ...prev]);
+    showToast(`Cloned "${pkg.name}"`);
+  };
+
+  // ── Handlers bundle ───────────────────────────────────────────────────────
+  const handlers = {
+    updProject,
+    saveDraft,
+    updScenario:    (sid, f, v)       => activeProject && updScenario(activeProject.id, sid, f, v),
+    updAssumption:  (sid, i, f, v)    => activeProject && updAssumption(activeProject.id, sid, i, f, v),
+    addAssumption:  (sid)             => activeProject && addAssumption(activeProject.id, sid),
+    remAssumption:  (sid, i)          => activeProject && remAssumption(activeProject.id, sid, i),
+    addCat:         (sid)             => activeProject && addCat(activeProject.id, sid),
+    remCat:         (sid, cid)        => activeProject && remCat(activeProject.id, sid, cid),
+    updCat:         (sid, cid, f, v)  => activeProject && updCat(activeProject.id, sid, cid, f, v),
+    addItem:        (sid, cid)        => activeProject && addItem(activeProject.id, sid, cid),
+    remItem:        (sid, cid, iid)   => activeProject && remItem(activeProject.id, sid, cid, iid),
+    updItem:        (sid, cid, iid, f, v) => activeProject && updItem(activeProject.id, sid, cid, iid, f, v),
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 transition-colors duration-300">
+      {/* Global nav */}
+      <header className="sticky top-0 z-40 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center gap-3">
+          <button onClick={()=>setScreen('dashboard')} className="flex items-center gap-2 font-bold text-lg text-indigo-600 dark:text-indigo-400">
+            <Icon name="zap" size={20} cls="text-indigo-500" />
+            <span className="hidden sm:inline">Offer Builder</span>
+          </button>
+          <div className="flex-1" />
+          {/* Nav tabs */}
+          {['dashboard','compare','packages'].map(s => (
+            <button key={s}
+              onClick={() => { if(s==='compare' && !activeProjectId && projects.length>0) setActiveProjectId(projects[0].id); setScreen(s); }}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${screen===s
+                ? 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>
+              {s==='dashboard'?'Dashboard':s==='compare'?'Compare':'Library'}
+            </button>
+          ))}
+          <button onClick={()=>setDarkMode(d=>!d)}
+            className="ml-1 p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+            title="Toggle dark mode">
+            <Icon name={darkMode?'sun':'moon'} size={18} />
+          </button>
+        </div>
+      </header>
+
+      {/* Screen router */}
+      <main className="max-w-7xl mx-auto px-4 py-6">
+        {screen === 'dashboard' && (
+          <Dashboard
+            projects={projects}
+            packages={packages}
+            onOpenProject={openProject}
+            onNewProject={createProject}
+            onToggleFav={toggleFavPackage}
+          />
+        )}
+        {screen === 'compare' && activeProject && (
+          <ScenarioCompare
+            project={activeProject}
+            handlers={handlers}
+            onSavePackage={handleSavePackage}
+          />
+        )}
+        {screen === 'compare' && !activeProject && (
+          <div className="text-center py-24">
+            <Icon name="folder" size={48} cls="mx-auto text-slate-300 dark:text-slate-600 mb-4" />
+            <p className="text-xl font-semibold text-slate-500 mb-2">No project selected</p>
+            <p className="text-slate-400 mb-6">Open a project from the dashboard or create a new one.</p>
+            <Btn variant="primary" onClick={()=>setScreen('dashboard')}>Go to Dashboard</Btn>
+          </div>
+        )}
+        {screen === 'packages' && (
+          <PackageLibrary
+            packages={packages}
+            onToggleFav={toggleFavPackage}
+            onUse={usePackage}
+            onClone={clonePackage}
+          />
+        )}
+      </main>
+
+      {/* Save Package Modal */}
+      {saveModal && (
+        <SavePackageModal
+          scenario={saveModal}
+          onClose={()=>setSaveModal(null)}
+          onSave={handleSavePackageSubmit}
+        />
+      )}
+
+      {/* Toast */}
+      {toast && <Toast key={toast.id} msg={toast.msg} type={toast.type} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
