@@ -89,7 +89,12 @@ function calcCategoryMetrics(cat) {
   items.filter(it => it.itemType === 'pct').forEach(it => {
     const rate = (Number(it.pctRate) || 0) / 100;
     const base = it.pctBase === 'cat_cost' ? cost : revenue;
-    cost += base * rate;
+    const amt = base * rate;
+    if (it.pctTarget === 'revenue') {
+      revenue += amt;
+    } else {
+      cost += amt;
+    }
   });
   return { revenue, cost, net: revenue - cost };
 }
@@ -792,33 +797,56 @@ function LineItemRow({ item, onUpdate, onRemove, catRevenue, catCost, defaultTyp
       cost:    'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400',
       pct:     'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
     };
-    const lbl = { revenue:'Rev', cost:'Cost', pct:'%' };
+    const lbl = {
+      revenue: 'Rev',
+      cost: 'Cost',
+      pct: (item.pctTarget === 'revenue') ? '%↑' : '%↓',
+    };
+    const pctCfg = (item.pctTarget === 'revenue')
+      ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+      : 'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400';
     return (
       <button onClick={cycleType} title="Cycle type: Revenue → Cost → %"
-        className={`text-[10px] px-1.5 py-0.5 rounded font-semibold flex-shrink-0 transition-colors ${cfg[type]||cfg.revenue}`}>
+        className={`text-[10px] px-1.5 py-0.5 rounded font-semibold flex-shrink-0 transition-colors ${type === 'pct' ? pctCfg : cfg[type]||cfg.revenue}`}>
         {lbl[type]||'Rev'}
       </button>
     );
   };
 
   if (type === 'pct') {
+    const pctTarget = item.pctTarget || 'cost';
     const rate = (Number(item.pctRate) || 0) / 100;
     const base = item.pctBase === 'cat_cost' ? catCost : catRevenue;
     const computed = base * rate;
+    const isRevTarget = pctTarget === 'revenue';
+    const resultColor = isRevTarget
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : 'text-red-500 dark:text-red-400';
+    const borderColor = isRevTarget
+      ? 'border-emerald-300 dark:border-emerald-700'
+      : 'border-amber-300 dark:border-amber-700';
     return (
-      <div className="flex items-center gap-1 py-0.5 group/item text-xs border-l-2 border-amber-300 dark:border-amber-700 pl-2 mb-1">
+      <div className={`flex items-center gap-1 py-0.5 group/item text-xs border-l-2 ${borderColor} pl-2 mb-1`}>
         <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
           className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
         <input type="number" value={item.pctRate??10} onChange={e=>onUpdate('pctRate',Number(e.target.value)||0)}
-          className="cell-input w-10 text-right font-mono text-amber-600 dark:text-amber-400" />
+          className="cell-input w-10 text-right font-mono text-slate-600 dark:text-slate-300" />
         <span className="text-slate-300 text-[10px] flex-shrink-0">% of</span>
         <select value={item.pctBase||'cat_revenue'} onChange={e=>onUpdate('pctBase',e.target.value)}
           className="text-[10px] bg-transparent text-slate-500 border border-slate-200 dark:border-slate-600 rounded px-1 py-0.5 flex-shrink-0">
-          <option value="cat_revenue">Revenue</option>
-          <option value="cat_cost">Cost</option>
+          <option value="cat_revenue">Seg Rev</option>
+          <option value="cat_cost">Seg Cost</option>
+        </select>
+        <span className="text-slate-300 text-[10px] flex-shrink-0">→</span>
+        <select value={pctTarget} onChange={e=>onUpdate('pctTarget',e.target.value)}
+          className={`text-[10px] font-semibold bg-transparent border border-slate-200 dark:border-slate-600 rounded px-1 py-0.5 flex-shrink-0 ${resultColor}`}>
+          <option value="revenue">Revenue</option>
+          <option value="cost">Cost</option>
         </select>
         <span className="text-slate-300 flex-shrink-0">=</span>
-        <span className="w-20 text-right font-mono font-semibold text-amber-600 dark:text-amber-400 flex-shrink-0">({cur(computed)})</span>
+        <span className={`w-20 text-right font-mono font-semibold flex-shrink-0 ${resultColor}`}>
+          {isRevTarget ? '+' : '-'}{cur(computed)}
+        </span>
         <TypeBadge/>
         <button onClick={onRemove} className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
           <Icon name="x" size={12}/>
@@ -1502,7 +1530,7 @@ function PackageDetailModal({ pkg, onClose, onUse, onClone }) {
                                 <div className="flex-1 min-w-0">
                                   <p className="text-sm font-medium leading-snug">{it.name || 'Unnamed'}</p>
                                   {type === 'pct' ? (
-                                    <p className="text-xs text-slate-400">{it.pctRate||0}% of {it.pctBase==='cat_cost'?'segment cost':'segment revenue'}</p>
+                                    <p className="text-xs text-slate-400">{it.pctRate||0}% of {it.pctBase==='cat_cost'?'segment cost':'segment revenue'} → {it.pctTarget==='revenue'?'Revenue':'Cost'}</p>
                                   ) : (
                                     <p className="text-xs text-slate-400">
                                       {qty > 0 ? `${qty} × ` : ''}{cur(price)}
@@ -2358,7 +2386,7 @@ function App() {
             categories: s.categories.map(c => {
               if (c.id !== catId) return c;
               const newItem = type === 'pct'
-                ? { id: uid(), name: 'New %', itemType: 'pct', pctRate: 10, pctBase: 'cat_revenue' }
+                ? { id: uid(), name: 'New %', itemType: 'pct', pctRate: 10, pctBase: 'cat_revenue', pctTarget: 'cost' }
                 : { id: uid(), name: 'New Item', itemType: type, qty: 1, unitPrice: 0, value: 0 };
               return { ...c, items: [...c.items, newItem] };
             }),
