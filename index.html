@@ -1806,63 +1806,76 @@ function ExcelImportModal({ onClose, onImport }) {
   const saveKey = (k) => { setApiKey(k); localStorage.setItem('anthropic_key', k); };
 
   // ── AI parsing via Claude API ─────────────────────────────────────────────
+  // JSON repair: try to salvage truncated/malformed AI output
+  const repairJSON = (text) => {
+    // Strip markdown fences
+    text = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    // Try straight parse first
+    try { return JSON.parse(text); } catch(_) {}
+    // Find first {
+    const start = text.indexOf('{');
+    if (start < 0) throw new Error('No JSON object in response');
+    let s = text.slice(start);
+    // Walk characters to find last fully-closed position at depth 0
+    let depth = 0, inStr = false, esc = false, lastClose = -1;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (esc) { esc = false; continue; }
+      if (c === '\\' && inStr) { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{' || c === '[') depth++;
+      else if (c === '}' || c === ']') { depth--; if (depth === 0) lastClose = i; }
+    }
+    // If we have a full valid segment, use it
+    if (lastClose > 0) {
+      try { return JSON.parse(s.slice(0, lastClose + 1)); } catch(_) {}
+    }
+    // Try to close open structures by appending closing brackets
+    // Strip trailing incomplete token (unfinished string, trailing comma)
+    s = s.replace(/,\s*$/, '').replace(/"[^"]*$/, '');
+    const closers = [']}]}', ']}', '}]}', '}}', '}]}}', '}}]}'];
+    for (const tail of closers) {
+      try { return JSON.parse(s + tail); } catch(_) {}
+    }
+    throw new Error('Could not parse or repair AI response JSON');
+  };
+
   const parseWithAI = async (workbook) => {
     const sheetName = workbook.SheetNames[0];
     const ws = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-    // Build a compact text table (max 120 rows, trim long cells)
-    const tableText = rows.slice(0, 120).map(r =>
-      r.map(c => String(c).slice(0, 60)).join('\t')
-    ).join('\n');
+    // Send up to 200 rows, trim cells to 80 chars, skip fully-empty rows
+    const tableText = rows
+      .slice(0, 200)
+      .filter(r => r.some(c => String(c).trim() !== ''))
+      .map(r => r.map(c => String(c).trim().slice(0, 80)).join('\t'))
+      .join('\n');
 
-    const prompt = `You are parsing a spreadsheet for an event/business scenario comparison app.
+    const prompt = `You are parsing a Thai business/event quotation spreadsheet for a scenario comparison app.
 
-SPREADSHEET DATA (tab-separated):
+SPREADSHEET (tab-separated, may have 3 scenario columns side-by-side):
 \`\`\`
 ${tableText}
 \`\`\`
 
-TASK: Analyze this spreadsheet and extract scenario comparisons. Return ONLY a JSON object:
+TASK: Extract up to 3 scenarios. Return ONLY compact valid JSON — no explanation, no markdown.
 
-{
-  "name": "<project name, use sheet name or first title found>",
-  "scenarios": [
-    {
-      "label": "<scenario name e.g. ช่วงเช้า / Option A / Package 1>",
-      "subtitle": "<short description if found>",
-      "units": <number of units/pax if found, else 1>,
-      "revenuePerUnit": <revenue per unit/pax if found, else 0>,
-      "categories": [
-        {
-          "name": "<category name>",
-          "isRevenue": <true if income/sales/ยอดขาย/รายรับ, false if cost/expense/ค่าใช้จ่าย>,
-          "isDirect": true,
-          "items": [
-            {
-              "name": "<line item name>",
-              "qty": <quantity if a qty/จำนวน column exists for this item, else omit>,
-              "value": <if qty present: unit selling price; else total selling/net price — always positive>,
-              "unitCost": <unit cost/ต้นทุน if a separate cost column exists for this item, else omit>
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
+JSON SCHEMA:
+{"name":"<project name>","scenarios":[{"label":"<scenario name>","subtitle":"","units":1,"revenuePerUnit":0,"categories":[{"name":"<category>","isRevenue":<true|false>,"items":[{"name":"<item>","qty":<num>,"unitPrice":<num>,"unitCost":<num or omit>}]}]}]}
 
 RULES:
-1. Detect ALL scenarios (usually side-by-side column groups) — max 3
-2. For each scenario, find its "selling price" or "ราคาขาย" or "net" or "รวม" column (NOT list/ราคาปกติ price)
-3. Category rows = rows with a name but NO numeric value in the price column
-4. Line item rows = rows with BOTH a name AND a numeric price value
-5. Skip pure subtotal/total/summary rows
-6. IMPORTANT — cost detection: if a row has BOTH a selling price column AND a cost/ต้นทุน column, set "value"=selling price and "unitCost"=cost per unit
-7. IMPORTANT — qty detection: if there is a quantity/จำนวน/pax column, set "qty" and "value"=unit price (not total)
-8. Mark isRevenue=true ONLY for income/sales; all cost/expense categories → isRevenue=false
-9. Thai: อาหาร=food, เครื่องดื่ม=drinks, เวที=stage, ดอกไม้=flowers, ทีมงาน=staff, ค่าใช้จ่าย=expenses
-10. Return ONLY valid JSON — no markdown, no explanation`;
+1. MULTIPLE SCENARIOS: If columns repeat (e.g. ช่วงเช้า / ช่วงเย็น / เช้า+เย็น), extract each as a separate scenario with its own column values
+2. isRevenue=true → ยอดขาย/ราคาขาย/รายรับ (income). isRevenue=false → ต้นทุน/ค่าใช้จ่าย/cost (expense)
+3. "qty" × "unitPrice" = selling total. "unitCost" = cost per unit (if there's a separate cost column)
+4. Skip subtotal/total/grand-total/summary rows. Skip rows with no price.
+5. If a row has BOTH a ราคาขาย and a ต้นทุน column → unitPrice=ราคาขาย, unitCost=ต้นทุน
+6. Category row = row with label but no number. Item row = row with label + number.
+7. Thai vocab: อาหาร=food, เครื่องดื่ม=drinks, เวที=stage, ดอกไม้=flowers, ทีมงาน=staff, บริการ=service, ค่าใช้จ่าย=expenses, รวม=total, จำนวน=quantity
+8. COMPACT output: omit unitCost when 0, omit subtitle when empty
+9. Keep item names short (≤50 chars). Max 5 scenarios, max 10 categories each, max 30 items each.
+10. Return ONLY valid JSON starting with {`;
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1874,7 +1887,7 @@ RULES:
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 4096,
+        max_tokens: 8192,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
@@ -1885,13 +1898,16 @@ RULES:
     }
 
     const data = await resp.json();
-    const text = data.content[0].text.trim();
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('AI returned invalid JSON');
-    const aiData = JSON.parse(jsonMatch[0]);
+    const rawText = data.content[0].text.trim();
+    let aiData;
+    try {
+      aiData = repairJSON(rawText);
+    } catch (parseErr) {
+      throw new Error(`JSON repair failed: ${parseErr.message} (response length: ${rawText.length} chars)`);
+    }
 
     // Hydrate with IDs to match app schema
-    const scenarios = (aiData.scenarios || []).slice(0, 3).map(s => ({
+    const scenarios = (aiData.scenarios || []).slice(0, 5).map(s => ({
       id: uid(),
       label: s.label || 'Scenario',
       name: s.label || 'Scenario',
@@ -1905,16 +1921,15 @@ RULES:
         isRevenue: c.isRevenue === true,
         isDirectCost: c.isDirect !== false,
         items: (c.items || []).map(it => {
-          const hasQty = it.qty != null && it.qty !== '';
-          const qty = hasQty ? Number(it.qty) || 1 : undefined;
-          const unitPrice = hasQty ? Number(it.value) || 0 : undefined;
-          const unitCost = it.unitCost != null && it.unitCost !== '' ? Number(it.unitCost) : undefined;
+          const qty = Number(it.qty) || 1;
+          const unitPrice = Number(it.unitPrice ?? it.value) || 0;
+          const unitCost = (it.unitCost != null && it.unitCost !== '') ? Number(it.unitCost) : undefined;
           return {
             id: uid(),
             name: it.name || 'Item',
             qty,
             unitPrice,
-            value: hasQty ? qty * (unitPrice||0) : Number(it.value) || 0,
+            value: qty * unitPrice,
             ...(unitCost !== undefined ? { unitCost } : {}),
           };
         }),
@@ -1957,11 +1972,16 @@ RULES:
     let proj;
     if (useAI && apiKey.trim()) {
       try {
-        setLoadingMsg('กำลังส่งข้อมูลให้ AI วิเคราะห์...');
+        setLoadingMsg('กำลังส่งข้อมูลให้ AI วิเคราะห์ (อาจใช้เวลา 10-20 วินาที)...');
         proj = await parseWithAI(wb);
       } catch (err) {
         setLoading(false);
-        setError('AI Error: ' + err.message + ' — ลองใช้ Auto Parse แทน');
+        const hint = err.message.includes('JSON repair failed')
+          ? 'AI ส่ง JSON ไม่สมบูรณ์ — ไฟล์อาจซับซ้อนเกินไป ลองเปิด AI Parse แบบ Auto Parse แทน หรือลดจำนวน row'
+          : err.message.includes('401') ? 'API Key ไม่ถูกต้อง กรุณาตรวจสอบ'
+          : err.message.includes('529') || err.message.includes('overloaded') ? 'Claude API busy — รอสักครู่แล้วลองใหม่'
+          : err.message;
+        setError(`AI Error: ${hint}`);
         return;
       }
     } else {
