@@ -2373,9 +2373,26 @@ RULES:
 }
 
 // ─── APP ROOT ────────────────────────────────────────────────────────────────
+function useLocalState(key, init) {
+  const [val, setVal] = React.useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : (typeof init === 'function' ? init() : init);
+    } catch { return typeof init === 'function' ? init() : init; }
+  });
+  const setAndPersist = React.useCallback((updater) => {
+    setVal(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [key]);
+  return [val, setAndPersist];
+}
+
 function App() {
-  const [projects, setProjects]             = React.useState(INIT_PROJECTS);
-  const [packages, setPackages]             = React.useState(INIT_PACKAGES);
+  const [projects, setProjects]             = useLocalState('ob_projects', INIT_PROJECTS);
+  const [packages, setPackages]             = useLocalState('ob_packages', INIT_PACKAGES);
   const [screen, setScreen]                 = React.useState('dashboard');
   const [activeProjectId, setActiveProjectId] = React.useState(null);
   const [darkMode, setDarkMode]             = React.useState(false);
@@ -2433,7 +2450,7 @@ function App() {
     setProjects(prev => prev.map(p =>
       p.id !== id ? p : { ...p, status: 'draft', updatedAt: new Date().toISOString() }
     ));
-    showToast('Draft saved');
+    showToast('บันทึกสำเร็จ ✓');
   };
 
   // ── Scenario-level updates ───────────────────────────────────────────────
