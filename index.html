@@ -73,24 +73,35 @@ function itemEffValue(item) {
   return Number(item.value) || 0;
 }
 
+function itemCogValue(item) {
+  if (item.qty !== undefined && item.unitCost !== undefined)
+    return (Number(item.qty)||0) * (Number(item.unitCost)||0);
+  return 0;
+}
+
 function calcMetrics(scenario) {
-  let revenue = 0, expenses = 0, direct = 0;
+  let revenue = 0, cogs = 0, expenses = 0, direct = 0;
   (scenario.categories || []).forEach(cat => {
     const catTotal = (cat.items||[]).reduce((s,it) => s + itemEffValue(it), 0);
-    if (cat.isRevenue) revenue += catTotal;
-    else { expenses += catTotal; if (cat.isDirectCost) direct += catTotal; }
+    if (cat.isRevenue) {
+      revenue += catTotal;
+      cogs += (cat.items||[]).reduce((s,it) => s + itemCogValue(it), 0);
+    } else {
+      expenses += catTotal;
+      if (cat.isDirectCost) direct += catTotal;
+    }
   });
   if (revenue === 0) {
     const u = Number(scenario.units)||0, rpu = Number(scenario.revenuePerUnit)||0;
     if (u > 0 || rpu > 0) revenue = u * rpu;
   }
-  const net = revenue - expenses;
+  const grossProfit = revenue - cogs;
+  const net = grossProfit - expenses;
   const margin = revenue > 0 ? (net / revenue) * 100 : 0;
-  const gross = revenue - direct;
-  const grossMgn = revenue > 0 ? (gross / revenue) * 100 : 0;
+  const grossMgn = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
   const units = Number(scenario.units) || 1;
-  return { revenue, expenses, net, margin,
-    rev:revenue, tot:expenses, gross, direct, netMgn:margin, grossMgn,
+  return { revenue, cogs, grossProfit, expenses, net, margin,
+    rev:revenue, tot:expenses, gross:grossProfit, direct, netMgn:margin, grossMgn,
     cpu: expenses/units, ppu: net/units };
 }
 
@@ -129,7 +140,7 @@ const INIT_PROJECTS = [
         ],
         categories:[
           { id:'c0r', name:'Ticket Sales', isRevenue:true, isDirectCost:false, items:[
-            {id:'i0r',name:'Virtual Ticket',qty:500,unitPrice:199,value:99500},
+            {id:'i0r',name:'Virtual Ticket',qty:500,unitPrice:199,unitCost:40,value:99500},
           ]},
           { id:'c1', name:'Technology', isRevenue:false, isDirectCost:true, items:[
             {id:'i1',name:'Platform License',qty:1,unitPrice:12000,value:12000},
@@ -161,8 +172,8 @@ const INIT_PROJECTS = [
         ],
         categories:[
           { id:'c5r', name:'Ticket Sales', isRevenue:true, isDirectCost:false, items:[
-            {id:'i5r',name:'In-Person Ticket',qty:200,unitPrice:380,value:76000},
-            {id:'i5r2',name:'Virtual Ticket',qty:200,unitPrice:380,value:76000},
+            {id:'i5r',name:'In-Person Ticket',qty:200,unitPrice:380,unitCost:80,value:76000},
+            {id:'i5r2',name:'Virtual Ticket',qty:200,unitPrice:380,unitCost:40,value:76000},
           ]},
           { id:'c5', name:'Technology', isRevenue:false, isDirectCost:true, items:[
             {id:'i10',name:'Platform License',qty:1,unitPrice:12000,value:12000},
@@ -198,7 +209,7 @@ const INIT_PROJECTS = [
         ],
         categories:[
           { id:'c10r', name:'Ticket Sales', isRevenue:true, isDirectCost:false, items:[
-            {id:'i10r',name:'Premium Ticket',qty:200,unitPrice:890,value:178000},
+            {id:'i10r',name:'Premium Ticket',qty:200,unitPrice:890,unitCost:120,value:178000},
           ]},
           { id:'c10', name:'Technology', isRevenue:false, isDirectCost:true, items:[
             {id:'i21',name:'AV & Production',qty:1,unitPrice:18000,value:18000},
@@ -747,11 +758,14 @@ function AssumptionsPanel({ scenarios, onUpdate, onAdd, onRemove }) {
 }
 
 // ── Line Item Row ──────────────────────────────────────────────────────────
-function LineItemRow({ item, onUpdate, onRemove }) {
+function LineItemRow({ item, onUpdate, onRemove, isRevenue }) {
   const cur = useCur();
   const hasQty = item.qty !== undefined;
   const total = itemEffValue(item);
+  const cog = itemCogValue(item);
+  const netContrib = total - cog;
   const [showQty, setShowQty] = useState(hasQty);
+  const [showCost, setShowCost] = useState(item.unitCost !== undefined);
 
   const handleUnitPriceChange = (v) => {
     const num = Number(v) || 0;
@@ -764,32 +778,60 @@ function LineItemRow({ item, onUpdate, onRemove }) {
     onUpdate('qty', num);
     onUpdate('value', num * (Number(item.unitPrice) || Number(item.value) || 0));
   };
+  const handleUnitCostChange = (v) => {
+    const num = Number(v) || 0;
+    onUpdate('unitCost', num);
+  };
+  const toggleCost = () => {
+    const next = !showCost;
+    setShowCost(next);
+    if (!next) onUpdate('unitCost', undefined);
+  };
 
   return (
-    <div className="flex items-center gap-1 py-1 group/item text-xs">
-      <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
-        className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
-      {showQty ? (
-        <>
-          <input type="number" value={item.qty??1} onChange={e=>handleQtyChange(e.target.value)}
-            className="cell-input w-12 text-right font-mono text-slate-500" placeholder="qty" title="Quantity" />
-          <span className="text-slate-300 flex-shrink-0">×</span>
-          <input type="number" value={item.unitPrice??''} onChange={e=>handleUnitPriceChange(e.target.value)}
-            className="cell-input w-20 text-right font-mono text-slate-600 dark:text-slate-300" placeholder="unit price" title="Unit Price" />
+    <div className="flex flex-col py-1 group/item text-xs">
+      <div className="flex items-center gap-1">
+        <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
+          className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
+        {showQty ? (
+          <>
+            <input type="number" value={item.qty??1} onChange={e=>handleQtyChange(e.target.value)}
+              className="cell-input w-12 text-right font-mono text-slate-500" placeholder="qty" title="Quantity" />
+            <span className="text-slate-300 flex-shrink-0">×</span>
+            <input type="number" value={item.unitPrice??''} onChange={e=>handleUnitPriceChange(e.target.value)}
+              className="cell-input w-20 text-right font-mono text-slate-600 dark:text-slate-300" placeholder="unit price" title="Unit Price" />
+            <span className="text-slate-300 flex-shrink-0">=</span>
+            <span className={`w-20 text-right font-mono font-semibold flex-shrink-0 ${isRevenue && showCost ? 'text-slate-400 dark:text-slate-500 line-through' : 'text-slate-700 dark:text-slate-200'}`}>{cur(total)}</span>
+          </>
+        ) : (
+          <input type="number" value={item.value||''} onChange={e=>onUpdate('value',Number(e.target.value)||0)}
+            className="cell-input w-24 text-right font-mono" placeholder="0" />
+        )}
+        {isRevenue && showQty && (
+          <button onClick={toggleCost} title={showCost ? 'Remove cost' : 'Add unit cost'}
+            className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-amber-500 transition-all flex-shrink-0 text-xs font-bold">
+            {showCost ? '−$' : '+$'}
+          </button>
+        )}
+        <button onClick={()=>setShowQty(v=>!v)} title={showQty?'Switch to total':'Add qty × price'}
+          className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-indigo-500 transition-all flex-shrink-0 text-xs">
+          {showQty?'—':'×'}
+        </button>
+        <button onClick={onRemove} className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
+          <Icon name="x" size={12} />
+        </button>
+      </div>
+      {isRevenue && showQty && showCost && (
+        <div className="flex items-center gap-1 pl-[calc(100%-24rem)] mt-0.5">
+          <span className="text-slate-300 flex-shrink-0 ml-auto">−</span>
+          <input type="number" value={item.unitCost??''} onChange={e=>handleUnitCostChange(e.target.value)}
+            className="cell-input w-20 text-right font-mono text-amber-600 dark:text-amber-400" placeholder="unit cost" title="Unit Cost" />
           <span className="text-slate-300 flex-shrink-0">=</span>
-          <span className="w-20 text-right font-mono font-semibold text-slate-700 dark:text-slate-200 flex-shrink-0">{cur(total)}</span>
-        </>
-      ) : (
-        <input type="number" value={item.value||''} onChange={e=>onUpdate('value',Number(e.target.value)||0)}
-          className="cell-input w-24 text-right font-mono" placeholder="0" />
+          <span className={`w-20 text-right font-mono font-bold flex-shrink-0 ${netContrib>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(netContrib)}</span>
+          <div className="w-[calc(0.5rem+12px)] flex-shrink-0" />
+          <div className="w-[calc(0.5rem+12px)] flex-shrink-0" />
+        </div>
       )}
-      <button onClick={()=>setShowQty(v=>!v)} title={showQty?'Switch to total':'Add qty × price'}
-        className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-indigo-500 transition-all flex-shrink-0 text-xs">
-        {showQty?'—':'×'}
-      </button>
-      <button onClick={onRemove} className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
-        <Icon name="x" size={12} />
-      </button>
     </div>
   );
 }
@@ -798,8 +840,10 @@ function LineItemRow({ item, onUpdate, onRemove }) {
 function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem, onRemoveItem }) {
   const [open, setOpen] = useState(true);
   const cur = useCur();
-  const sub = (cat.items||[]).reduce((a,it)=>a+itemEffValue(it),0);
   const isRev = cat.isRevenue;
+  const grossSub = (cat.items||[]).reduce((a,it)=>a+itemEffValue(it),0);
+  const cogSub = (cat.items||[]).reduce((a,it)=>a+itemCogValue(it),0);
+  const sub = isRev ? grossSub - cogSub : grossSub;
   const borderCls = isRev
     ? 'border-emerald-200 dark:border-emerald-800'
     : 'border-slate-100 dark:border-slate-700';
@@ -827,7 +871,7 @@ function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem,
       {open && (
         <div className={`pl-4 border-l-2 ${borderCls} ml-2`}>
           {(cat.items||[]).map(item=>(
-            <LineItemRow key={item.id} item={item}
+            <LineItemRow key={item.id} item={item} isRevenue={isRev}
               onUpdate={(f,v)=>onUpdateItem(item.id,f,v)}
               onRemove={()=>onRemoveItem(item.id)} />
           ))}
@@ -907,16 +951,32 @@ function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, o
           <span className="text-slate-500">Total Revenue</span>
           <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">{cur(m.revenue)}</span>
         </div>
+        {m.cogs > 0 && (
+          <>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-500">− Cost of Revenue</span>
+              <span className="font-mono font-semibold text-amber-600 dark:text-amber-400">({cur(m.cogs)})</span>
+            </div>
+            <div className="flex justify-between text-xs pt-1 border-t border-slate-200 dark:border-slate-600">
+              <span className="text-slate-600 dark:text-slate-300 font-medium">Gross Profit</span>
+              <span className={`font-mono font-semibold ${m.grossProfit>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.grossProfit)}</span>
+            </div>
+            <div className="flex justify-between text-xs pb-1 border-b border-slate-200 dark:border-slate-600">
+              <span className="text-slate-400 text-[10px]">Gross Margin</span>
+              <span className={`font-mono text-[10px] ${m.grossMgn>=0?col.text:'text-red-500'}`}>{pct(m.grossMgn)}</span>
+            </div>
+          </>
+        )}
         <div className="flex justify-between text-xs">
-          <span className="text-slate-500">Total Expenses</span>
-          <span className="font-mono font-semibold text-red-500">{cur(m.expenses)}</span>
+          <span className="text-slate-500">− Total Expenses</span>
+          <span className="font-mono font-semibold text-red-500">({cur(m.expenses)})</span>
         </div>
         <div className="flex justify-between text-xs pt-1.5 border-t border-slate-200 dark:border-slate-600">
           <span className="font-semibold text-slate-700 dark:text-slate-200">Net Profit</span>
           <span className={`font-mono font-bold ${m.net>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.net)}</span>
         </div>
         <div className="flex justify-between text-xs">
-          <span className="text-slate-400">Margin</span>
+          <span className="text-slate-400">Net Margin</span>
           <span className={`font-mono font-semibold ${m.margin>=0?col.text:'text-red-500'}`}>{pct(m.margin)}</span>
         </div>
         <button onClick={onSavePackage} className="w-full flex items-center justify-center gap-1.5 text-xs font-medium py-2 mt-1 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
