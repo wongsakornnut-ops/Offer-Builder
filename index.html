@@ -99,6 +99,115 @@ function calcCategoryMetrics(cat) {
   return { revenue, cost, net: revenue - cost };
 }
 
+function exportProjectMarkdown(project) {
+  const scenarios = project.scenarios || [];
+  const cur = (n) => {
+    const sym = { THB:'฿', USD:'$', EUR:'€', GBP:'£', SGD:'S$', JPY:'¥', CNY:'¥' }[project.currency||'THB'] || '฿';
+    return sym + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  };
+  const pctFmt = (n) => (Number(n) || 0).toFixed(1) + '%';
+  const metrics = scenarios.map(s => calcMetrics(s));
+
+  const lines = [];
+  lines.push(`# ${project.name || 'Untitled Project'}`);
+  lines.push(`> Export Date: ${new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })}`);
+  lines.push(`> Currency: ${project.currency || 'THB'}`);
+  lines.push('');
+
+  // Overview comparison table
+  lines.push('## 📊 Scenarios Overview');
+  lines.push('');
+  const colHdr = ['Metric', ...scenarios.map(s => s.label || s.name || 'Scenario')];
+  lines.push('| ' + colHdr.join(' | ') + ' |');
+  lines.push('| ' + colHdr.map(() => '---').join(' | ') + ' |');
+  const rows = [
+    ['Revenue',    ...metrics.map(m => cur(m.revenue))],
+    ['Total Cost', ...metrics.map(m => cur(m.expenses))],
+    ['Net Profit', ...metrics.map(m => cur(m.net))],
+    ['Net Margin', ...metrics.map(m => pctFmt(m.margin))],
+  ];
+  rows.forEach(r => lines.push('| ' + r.join(' | ') + ' |'));
+  lines.push('');
+
+  // Key differences
+  if (scenarios.length >= 2) {
+    lines.push('## 🔍 Key Differences (for AI analysis)');
+    lines.push('');
+    lines.push('Please analyze the following scenarios and explain:');
+    lines.push('1. What are the main financial differences between each scenario?');
+    lines.push('2. Which scenario is most profitable and why?');
+    lines.push('3. What are the biggest cost drivers in each scenario?');
+    lines.push('4. What risks or opportunities do you see in each scenario?');
+    lines.push('5. What recommendations would you make to improve profitability?');
+    lines.push('');
+    // Revenue diff table
+    if (scenarios.length === 2) {
+      const diff = metrics[1].revenue - metrics[0].revenue;
+      const diffNet = metrics[1].net - metrics[0].net;
+      lines.push(`**Revenue difference:** ${diff >= 0 ? '+' : ''}${cur(diff)} (${diff >= 0 ? '+' : ''}${pctFmt(metrics[0].revenue > 0 ? diff/metrics[0].revenue*100 : 0)})`);
+      lines.push(`**Net Profit difference:** ${diffNet >= 0 ? '+' : ''}${cur(diffNet)}`);
+      lines.push('');
+    }
+  }
+
+  // Each scenario detail
+  scenarios.forEach((s, si) => {
+    const m = metrics[si];
+    lines.push(`## Scenario ${si + 1}: ${s.label || s.name || 'Scenario'}`);
+    if (s.subtitle) lines.push(`> ${s.subtitle}`);
+    lines.push('');
+    lines.push(`- **Revenue:** ${cur(m.revenue)}`);
+    lines.push(`- **Total Cost:** ${cur(m.expenses)}`);
+    lines.push(`- **Net Profit:** ${cur(m.net)}`);
+    lines.push(`- **Net Margin:** ${pctFmt(m.margin)}`);
+    if (s.units > 1) lines.push(`- **Units/Pax:** ${s.units}`);
+    lines.push('');
+
+    (s.categories || []).forEach(cat => {
+      const cm = calcCategoryMetrics(cat);
+      lines.push(`### ${cat.icon || ''} ${cat.name}`);
+      lines.push('');
+      if ((cat.items || []).length > 0) {
+        lines.push('| Item | Type | Qty | Unit Price | Unit Cost | Total |');
+        lines.push('| --- | --- | --- | --- | --- | --- |');
+        cat.items.forEach(it => {
+          const type = it.itemType || (cat.isRevenue !== false ? 'revenue' : 'cost');
+          const qty = Number(it.qty) || 1;
+          const unitPrice = Number(it.unitPrice) || Number(it.value) || 0;
+          const unitCost = Number(it.unitCost) || 0;
+          const total = qty * unitPrice;
+          let typeLabel;
+          if (type === 'pct') {
+            const base = it.pctBase === 'cat_cost' ? cm.cost : cm.revenue;
+            const amt = base * (Number(it.pctRate) || 0) / 100;
+            typeLabel = `${it.pctRate || 0}% → ${it.pctTarget === 'revenue' ? 'Rev' : 'Cost'}`;
+            lines.push(`| ${it.name} | ${typeLabel} | — | — | — | ${it.pctTarget === 'revenue' ? '+' : '-'}${cur(amt)} |`);
+            return;
+          }
+          typeLabel = type === 'revenue' ? '↑ Revenue' : '↓ Cost';
+          lines.push(`| ${it.name} | ${typeLabel} | ${it.qty != null ? qty : '—'} | ${unitPrice ? cur(unitPrice) : '—'} | ${unitCost ? cur(unitCost) : '—'} | ${cur(total)} |`);
+        });
+        lines.push('');
+      }
+      lines.push(`**Segment totals:** Revenue ${cur(cm.revenue)} | Cost ${cur(cm.cost)} | Net ${cur(cm.net)}`);
+      lines.push('');
+    });
+
+    if ((s.assumptions || []).length > 0) {
+      lines.push('#### Assumptions');
+      s.assumptions.forEach(a => {
+        const txt = typeof a === 'string' ? a : (a.text || a.label || '');
+        if (txt) lines.push(`- ${txt}`);
+      });
+      lines.push('');
+    }
+    lines.push('---');
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
 function calcMetrics(scenario) {
   let revenue = 0, expenses = 0;
   (scenario.categories || []).forEach(cat => {
@@ -402,6 +511,8 @@ const ICONS = {
   eye:         'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
   layers:      'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
   refresh:     'M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15',
+  grip:        'M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01',
+  export:      'M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13',
 };
 
 function Icon({ name, size=16, cls='' }) {
@@ -826,7 +937,10 @@ function LineItemRow({ item, onUpdate, onRemove, catRevenue, catCost, defaultTyp
       ? 'border-emerald-300 dark:border-emerald-700'
       : 'border-amber-300 dark:border-amber-700';
     return (
-      <div className={`flex items-center gap-1 py-0.5 group/item text-xs border-l-2 ${borderColor} pl-2 mb-1`}>
+      <div className={`flex items-center gap-1 py-0.5 group/item text-xs border-l-2 ${borderColor} pl-2 mb-1 cursor-grab active:cursor-grabbing`}>
+        <span className="opacity-0 group-hover/item:opacity-40 text-slate-400 flex-shrink-0 cursor-grab" title="Drag to reorder">
+          <Icon name="grip" size={12}/>
+        </span>
         <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
           className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
         <input type="number" value={item.pctRate??10} onChange={e=>onUpdate('pctRate',Number(e.target.value)||0)}
@@ -863,8 +977,11 @@ function LineItemRow({ item, onUpdate, onRemove, catRevenue, catCost, defaultTyp
   const netContrib = total - qty * unitCost;
 
   return (
-    <div className={`flex flex-col py-0.5 group/item text-xs border-l-2 ${borderCls} pl-2 mb-1`}>
+    <div className={`flex flex-col py-0.5 group/item text-xs border-l-2 ${borderCls} pl-2 mb-1 cursor-grab active:cursor-grabbing`}>
       <div className="flex items-center gap-1">
+        <span className="opacity-0 group-hover/item:opacity-40 text-slate-400 flex-shrink-0 cursor-grab" title="Drag to reorder">
+          <Icon name="grip" size={12}/>
+        </span>
         <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
           className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
         {item.qty !== undefined ? (
@@ -916,12 +1033,24 @@ function LineItemRow({ item, onUpdate, onRemove, catRevenue, catCost, defaultTyp
 }
 
 // ── Category Group ─────────────────────────────────────────────────────────
-function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem, onRemoveItem }) {
+function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem, onRemoveItem, onReorderItems }) {
   const [open, setOpen] = useState(true);
   const [showIcons, setShowIcons] = useState(false);
+  const [dragOver, setDragOver] = useState(null);
+  const dragSrc = React.useRef(null);
   const cur = useCur();
   const cm = calcCategoryMetrics(cat);
   const defaultType = cat.isRevenue !== false ? 'revenue' : 'cost';
+
+  const handleDragStart = (idx) => { dragSrc.current = idx; };
+  const handleDragOver = (e, idx) => { e.preventDefault(); setDragOver(idx); };
+  const handleDrop = (idx) => {
+    if (dragSrc.current !== null && dragSrc.current !== idx) {
+      onReorderItems(dragSrc.current, idx);
+    }
+    dragSrc.current = null; setDragOver(null);
+  };
+  const handleDragEnd = () => { dragSrc.current = null; setDragOver(null); };
 
   return (
     <div className="mb-3 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
@@ -962,13 +1091,21 @@ function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem,
 
       {open && (
         <div className="px-3 pt-2 pb-3">
-          {(cat.items||[]).map(item=>(
-            <LineItemRow key={item.id} item={item}
-              defaultType={defaultType}
-              catRevenue={cm.revenue}
-              catCost={cm.cost}
-              onUpdate={(f,v)=>onUpdateItem(item.id,f,v)}
-              onRemove={()=>onRemoveItem(item.id)}/>
+          {(cat.items||[]).map((item, idx)=>(
+            <div key={item.id}
+              draggable
+              onDragStart={()=>handleDragStart(idx)}
+              onDragOver={e=>handleDragOver(e, idx)}
+              onDrop={()=>handleDrop(idx)}
+              onDragEnd={handleDragEnd}
+              className={`transition-all ${dragOver===idx&&dragSrc.current!==idx?'border-t-2 border-indigo-400':'border-t-2 border-transparent'}`}>
+              <LineItemRow item={item}
+                defaultType={defaultType}
+                catRevenue={cm.revenue}
+                catCost={cm.cost}
+                onUpdate={(f,v)=>onUpdateItem(item.id,f,v)}
+                onRemove={()=>onRemoveItem(item.id)}/>
+            </div>
           ))}
           {/* Add buttons */}
           <div className="flex gap-3 mt-1.5">
@@ -1007,7 +1144,7 @@ function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem,
 }
 
 // ── Scenario Column (2-column comparison card) ────────────────────────────
-function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, onRemoveItem, onAddCat, onRemoveCat, onUpdateCat, onSavePackage }) {
+function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, onRemoveItem, onAddCat, onRemoveCat, onUpdateCat, onReorderItems, onSavePackage }) {
   const col = SCOL[colIdx % 3] || SCOL[0];
   const cur = useCur();
   const m = useMemo(() => calcMetrics(scenario), [scenario]);
@@ -1030,7 +1167,8 @@ function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, o
             onRemoveCat={()=>onRemoveCat(cat.id)}
             onUpdateItem={(iid,f,v)=>onUpdateItem(cat.id,iid,f,v)}
             onAddItem={(type)=>onAddItem(cat.id,type)}
-            onRemoveItem={(iid)=>onRemoveItem(cat.id,iid)} />
+            onRemoveItem={(iid)=>onRemoveItem(cat.id,iid)}
+            onReorderItems={(from,to)=>onReorderItems(cat.id,from,to)} />
         ))}
         <button onClick={()=>onAddCat()} className="flex items-center gap-1 text-xs text-slate-400 hover:text-indigo-600 py-1 mt-1 transition-colors">
           <Icon name="plus" size={11}/>Add segment
@@ -1306,14 +1444,15 @@ function ComparisonPairRow({ cmp, project, handlers, onSavePackage, onRemove, pa
   const better = diff > 0 ? 'right' : diff < 0 ? 'left' : 'tie';
 
   const makeH = (s, colIdx) => ({
-    onUpdate:      (f,v)       => handlers.updScenario(s.id,f,v),
-    onUpdateItem:  (c,iid,f,v) => handlers.updItem(s.id,c,iid,f,v),
-    onAddItem:     (cid,type)  => handlers.addItem(s.id,cid,type),
-    onRemoveItem:  (cid,iid)   => handlers.remItem(s.id,cid,iid),
-    onAddCat:      (type)      => handlers.addCat(s.id, type),
-    onRemoveCat:   (cid)       => handlers.remCat(s.id,cid),
-    onUpdateCat:   (cid,f,v)   => handlers.updCat(s.id,cid,f,v),
-    onSavePackage: ()          => onSavePackage(s),
+    onUpdate:        (f,v)           => handlers.updScenario(s.id,f,v),
+    onUpdateItem:    (c,iid,f,v)     => handlers.updItem(s.id,c,iid,f,v),
+    onAddItem:       (cid,type)      => handlers.addItem(s.id,cid,type),
+    onRemoveItem:    (cid,iid)       => handlers.remItem(s.id,cid,iid),
+    onAddCat:        (type)          => handlers.addCat(s.id, type),
+    onRemoveCat:     (cid)           => handlers.remCat(s.id,cid),
+    onUpdateCat:     (cid,f,v)       => handlers.updCat(s.id,cid,f,v),
+    onReorderItems:  (cid,from,to)   => handlers.reorderItems(s.id,cid,from,to),
+    onSavePackage:   ()              => onSavePackage(s),
     colIdx,
   });
 
@@ -1375,6 +1514,7 @@ function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, s
   const comparisons = project.comparisons || [];
   const currCode = project.currency || 'THB';
   const [compact, setCompact] = React.useState(true);
+  const [showExport, setShowExport] = React.useState(false);
 
   return (
     <CurrencyCtx.Provider value={{ code: currCode, compact }}>
@@ -1399,6 +1539,9 @@ function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, s
             className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 transition-colors font-mono font-semibold flex-shrink-0">
             {compact ? '1K' : '1,000'}
           </button>
+          <Btn v="secondary" sz="sm" onClick={()=>setShowExport(true)}>
+            <Icon name="export" size={14} /><span className="hidden sm:inline">Export for AI</span>
+          </Btn>
           <Btn v="primary" sz="sm" onClick={handlers.saveDraft}>
             <Icon name="save" size={14} /><span className="hidden sm:inline">Save</span>
           </Btn>
@@ -1436,12 +1579,62 @@ function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, s
           <Icon name="plus" size={16} />Add Comparison
         </button>
       </div>
+      {showExport && <ExportModal project={project} onClose={()=>setShowExport(false)} />}
     </div>
     </CurrencyCtx.Provider>
   );
 }
 
 // ── Package Library ────────────────────────────────────────────────────────
+function ExportModal({ project, onClose }) {
+  const [copied, setCopied] = React.useState(false);
+  const md = React.useMemo(() => exportProjectMarkdown(project), [project]);
+  const copy = () => {
+    navigator.clipboard.writeText(md).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+  const download = () => {
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url;
+    a.download = (project.name || 'export').replace(/[^a-z0-9]/gi, '_') + '.md';
+    a.click(); URL.revokeObjectURL(url);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100 dark:border-slate-700">
+          <Icon name="export" size={18} cls="text-indigo-500" />
+          <div className="flex-1">
+            <h2 className="font-bold text-sm">Export for AI Analysis</h2>
+            <p className="text-xs text-slate-400">วาง Markdown นี้ใน ChatGPT, Claude, Gemini ฯลฯ แล้วถามให้ AI วิเคราะห์</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400">
+            <Icon name="x" size={18}/>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          <pre className="text-[11px] leading-relaxed font-mono text-slate-600 dark:text-slate-300 whitespace-pre-wrap bg-slate-50 dark:bg-slate-800 rounded-xl p-4 select-all">{md}</pre>
+        </div>
+        <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-700 flex gap-3">
+          <Btn v="primary" cls="flex-1 justify-center" onClick={copy}>
+            <Icon name={copied?'check':'copy'} size={14}/>
+            {copied ? 'คัดลอกแล้ว!' : 'Copy to Clipboard'}
+          </Btn>
+          <Btn v="secondary" cls="flex-1 justify-center" onClick={download}>
+            <Icon name="download" size={14}/>Download .md
+          </Btn>
+          <Btn v="ghost" cls="flex-1 justify-center text-xs" onClick={() => {
+            const url = `https://claude.ai`;
+            window.open(url, '_blank');
+          }}>
+            Open Claude →
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PackageDetailModal({ pkg, onClose, onUse, onClone }) {
   const cur = useCur();
   const catColors = {'Events':'indigo','SaaS':'sky','Marketing':'violet','Food & Beverage':'amber','Professional Services':'green'};
@@ -2415,6 +2608,28 @@ function App() {
     }));
   };
 
+  const reorderItems = (projectId, scenarioId, catId, fromIdx, toIdx) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        scenarios: p.scenarios.map(s => {
+          if (s.id !== scenarioId) return s;
+          return {
+            ...s,
+            categories: s.categories.map(c => {
+              if (c.id !== catId) return c;
+              const items = [...c.items];
+              const [moved] = items.splice(fromIdx, 1);
+              items.splice(toIdx, 0, moved);
+              return { ...c, items };
+            }),
+          };
+        }),
+      };
+    }));
+  };
+
   const updItem = (projectId, scenarioId, catId, itemId, field, value) => {
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
@@ -2501,9 +2716,10 @@ function App() {
     addCat:         (sid)              => activeProject && addCat(activeProject.id, sid),
     remCat:         (sid, cid)         => activeProject && remCat(activeProject.id, sid, cid),
     updCat:         (sid, cid, f, v)   => activeProject && updCat(activeProject.id, sid, cid, f, v),
-    addItem:        (sid, cid, type)   => activeProject && addItem(activeProject.id, sid, cid, type),
-    remItem:        (sid, cid, iid)    => activeProject && remItem(activeProject.id, sid, cid, iid),
-    updItem:        (sid, cid, iid, f, v) => activeProject && updItem(activeProject.id, sid, cid, iid, f, v),
+    addItem:        (sid, cid, type)        => activeProject && addItem(activeProject.id, sid, cid, type),
+    remItem:        (sid, cid, iid)         => activeProject && remItem(activeProject.id, sid, cid, iid),
+    updItem:        (sid, cid, iid, f, v)   => activeProject && updItem(activeProject.id, sid, cid, iid, f, v),
+    reorderItems:   (sid, cid, from, to)    => activeProject && reorderItems(activeProject.id, sid, cid, from, to),
     addComparison:  (pid)              => addComparison(pid),
     removeComparison: (pid, cmpId)     => removeComparison(pid, cmpId),
   };
