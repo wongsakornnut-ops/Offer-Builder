@@ -69,41 +69,48 @@ function pct(n) {
   return n.toFixed(1) + '%';
 }
 
-function itemEffValue(item) {
-  if (item.qty !== undefined && item.unitPrice !== undefined)
-    return (Number(item.qty)||0) * (Number(item.unitPrice)||0);
-  return Number(item.value) || 0;
-}
-
-function itemCogValue(item) {
-  if (item.qty !== undefined && item.unitCost !== undefined)
-    return (Number(item.qty)||0) * (Number(item.unitCost)||0);
-  return 0;
+function calcCategoryMetrics(cat) {
+  const items = cat.items || [];
+  const defaultType = cat.isRevenue !== false ? 'revenue' : 'cost';
+  let revenue = 0, cost = 0;
+  items.filter(it => it.itemType !== 'pct').forEach(it => {
+    const type = it.itemType || defaultType;
+    const qty = Number(it.qty) || 0;
+    const price = Number(it.unitPrice) || Number(it.value) || 0;
+    const amt = qty > 0 ? qty * price : price;
+    if (type === 'cost') {
+      cost += amt;
+    } else {
+      revenue += amt;
+      const cogsPerUnit = Number(it.unitCost) || 0;
+      if (cogsPerUnit > 0) cost += qty > 0 ? qty * cogsPerUnit : cogsPerUnit;
+    }
+  });
+  items.filter(it => it.itemType === 'pct').forEach(it => {
+    const rate = (Number(it.pctRate) || 0) / 100;
+    const base = it.pctBase === 'cat_cost' ? cost : revenue;
+    cost += base * rate;
+  });
+  return { revenue, cost, net: revenue - cost };
 }
 
 function calcMetrics(scenario) {
-  let revenue = 0, cogs = 0, expenses = 0, direct = 0;
+  let revenue = 0, expenses = 0;
   (scenario.categories || []).forEach(cat => {
-    const catTotal = (cat.items||[]).reduce((s,it) => s + itemEffValue(it), 0);
-    if (cat.isRevenue) {
-      revenue += catTotal;
-      cogs += (cat.items||[]).reduce((s,it) => s + itemCogValue(it), 0);
-    } else {
-      expenses += catTotal;
-      if (cat.isDirectCost) direct += catTotal;
-    }
+    const m = calcCategoryMetrics(cat);
+    revenue += m.revenue;
+    expenses += m.cost;
   });
   if (revenue === 0) {
     const u = Number(scenario.units)||0, rpu = Number(scenario.revenuePerUnit)||0;
     if (u > 0 || rpu > 0) revenue = u * rpu;
   }
-  const grossProfit = revenue - cogs;
-  const net = grossProfit - expenses;
+  const net = revenue - expenses;
   const margin = revenue > 0 ? (net / revenue) * 100 : 0;
-  const grossMgn = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
   const units = Number(scenario.units) || 1;
-  return { revenue, cogs, grossProfit, expenses, net, margin,
-    rev:revenue, tot:expenses, gross:grossProfit, direct, netMgn:margin, grossMgn,
+  return { revenue, cogs:0, grossProfit:net, expenses, net, margin,
+    rev:revenue, tot:expenses, gross:net, direct:expenses,
+    netMgn:margin, grossMgn:margin,
     cpu: expenses/units, ppu: net/units };
 }
 
@@ -764,78 +771,116 @@ function AssumptionsPanel({ scenarios, onUpdate, onAdd, onRemove }) {
 }
 
 // ── Line Item Row ──────────────────────────────────────────────────────────
-function LineItemRow({ item, onUpdate, onRemove, isRevenue }) {
+function LineItemRow({ item, onUpdate, onRemove, catRevenue, catCost, defaultType }) {
   const cur = useCur();
-  const hasQty = item.qty !== undefined;
-  const total = itemEffValue(item);
-  const cog = itemCogValue(item);
-  const netContrib = total - cog;
-  const [showQty, setShowQty] = useState(hasQty);
+  const type = item.itemType || defaultType || 'revenue';
+  const qty = Number(item.qty) || 0;
+  const price = Number(item.unitPrice) || Number(item.value) || 0;
+  const total = qty > 0 ? qty * price : price;
   const [showCost, setShowCost] = useState(item.unitCost !== undefined);
 
-  const handleUnitPriceChange = (v) => {
-    const num = Number(v) || 0;
-    onUpdate('unitPrice', num);
-    if (!hasQty) { onUpdate('qty', 1); }
-    onUpdate('value', (Number(item.qty)||1) * num);
-  };
-  const handleQtyChange = (v) => {
-    const num = Number(v) || 0;
-    onUpdate('qty', num);
-    onUpdate('value', num * (Number(item.unitPrice) || Number(item.value) || 0));
-  };
-  const handleUnitCostChange = (v) => {
-    const num = Number(v) || 0;
-    onUpdate('unitCost', num);
-  };
-  const toggleCost = () => {
-    const next = !showCost;
-    setShowCost(next);
-    if (!next) onUpdate('unitCost', undefined);
+  const TYPE_CYCLE = ['revenue','cost','pct'];
+  const cycleType = () => {
+    const next = TYPE_CYCLE[(TYPE_CYCLE.indexOf(type) + 1) % TYPE_CYCLE.length];
+    onUpdate('itemType', next);
+    if (next === 'pct') { onUpdate('pctRate', item.pctRate || 10); onUpdate('pctBase', item.pctBase || 'cat_revenue'); }
   };
 
+  const TypeBadge = () => {
+    const cfg = {
+      revenue: 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300',
+      cost:    'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400',
+      pct:     'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+    };
+    const lbl = { revenue:'Rev', cost:'Cost', pct:'%' };
+    return (
+      <button onClick={cycleType} title="Cycle type: Revenue → Cost → %"
+        className={`text-[10px] px-1.5 py-0.5 rounded font-semibold flex-shrink-0 transition-colors ${cfg[type]||cfg.revenue}`}>
+        {lbl[type]||'Rev'}
+      </button>
+    );
+  };
+
+  if (type === 'pct') {
+    const rate = (Number(item.pctRate) || 0) / 100;
+    const base = item.pctBase === 'cat_cost' ? catCost : catRevenue;
+    const computed = base * rate;
+    return (
+      <div className="flex items-center gap-1 py-0.5 group/item text-xs border-l-2 border-amber-300 dark:border-amber-700 pl-2 mb-1">
+        <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
+          className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
+        <input type="number" value={item.pctRate??10} onChange={e=>onUpdate('pctRate',Number(e.target.value)||0)}
+          className="cell-input w-10 text-right font-mono text-amber-600 dark:text-amber-400" />
+        <span className="text-slate-300 text-[10px] flex-shrink-0">% of</span>
+        <select value={item.pctBase||'cat_revenue'} onChange={e=>onUpdate('pctBase',e.target.value)}
+          className="text-[10px] bg-transparent text-slate-500 border border-slate-200 dark:border-slate-600 rounded px-1 py-0.5 flex-shrink-0">
+          <option value="cat_revenue">Revenue</option>
+          <option value="cat_cost">Cost</option>
+        </select>
+        <span className="text-slate-300 flex-shrink-0">=</span>
+        <span className="w-20 text-right font-mono font-semibold text-amber-600 dark:text-amber-400 flex-shrink-0">({cur(computed)})</span>
+        <TypeBadge/>
+        <button onClick={onRemove} className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
+          <Icon name="x" size={12}/>
+        </button>
+      </div>
+    );
+  }
+
+  const isRev = type === 'revenue';
+  const borderCls = isRev
+    ? 'border-emerald-300 dark:border-emerald-700'
+    : 'border-red-300 dark:border-red-800';
+  const unitCost = Number(item.unitCost) || 0;
+  const netContrib = total - qty * unitCost;
+
   return (
-    <div className="flex flex-col py-1 group/item text-xs">
+    <div className={`flex flex-col py-0.5 group/item text-xs border-l-2 ${borderCls} pl-2 mb-1`}>
       <div className="flex items-center gap-1">
         <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
           className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
-        {showQty ? (
+        {item.qty !== undefined ? (
           <>
-            <input type="number" value={item.qty??1} onChange={e=>handleQtyChange(e.target.value)}
-              className="cell-input w-12 text-right font-mono text-slate-500" placeholder="qty" title="Quantity" />
+            <input type="number" value={item.qty??1} onChange={e=>{const q=Number(e.target.value)||0;onUpdate('qty',q);onUpdate('value',q*(Number(item.unitPrice)||0));}}
+              className="cell-input w-12 text-right font-mono text-slate-500" placeholder="qty"/>
             <span className="text-slate-300 flex-shrink-0">×</span>
-            <input type="number" value={item.unitPrice??''} onChange={e=>handleUnitPriceChange(e.target.value)}
-              className="cell-input w-20 text-right font-mono text-slate-600 dark:text-slate-300" placeholder="unit price" title="Unit Price" />
+            <input type="number" value={item.unitPrice??''} onChange={e=>{const p=Number(e.target.value)||0;onUpdate('unitPrice',p);onUpdate('value',(Number(item.qty)||1)*p);}}
+              className="cell-input w-20 text-right font-mono text-slate-600 dark:text-slate-300" placeholder="price"/>
             <span className="text-slate-300 flex-shrink-0">=</span>
-            <span className={`w-20 text-right font-mono font-semibold flex-shrink-0 ${isRevenue && showCost ? 'text-slate-400 dark:text-slate-500 line-through' : 'text-slate-700 dark:text-slate-200'}`}>{cur(total)}</span>
+            <span className={`w-20 text-right font-mono font-semibold flex-shrink-0 ${isRev&&showCost?'text-slate-400 dark:text-slate-500 line-through':isRev?'text-emerald-700 dark:text-emerald-300':'text-red-500 dark:text-red-400'}`}>
+              {isRev ? cur(total) : `(${cur(total)})`}
+            </span>
           </>
         ) : (
           <input type="number" value={item.value||''} onChange={e=>onUpdate('value',Number(e.target.value)||0)}
-            className="cell-input w-24 text-right font-mono" placeholder="0" />
+            className="cell-input w-24 text-right font-mono" placeholder="0"/>
         )}
-        {isRevenue && showQty && (
-          <button onClick={toggleCost} title={showCost ? 'Remove cost' : 'Add unit cost'}
-            className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-amber-500 transition-all flex-shrink-0 text-xs font-bold">
-            {showCost ? '−$' : '+$'}
+        {isRev && item.qty !== undefined && (
+          <button onClick={()=>{const n=!showCost;setShowCost(n);if(!n)onUpdate('unitCost',undefined);}}
+            title={showCost?'Remove unit cost':'Add unit cost'}
+            className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-amber-500 transition-all flex-shrink-0 text-[10px] font-bold">
+            {showCost?'−$':'+$'}
           </button>
         )}
-        <button onClick={()=>setShowQty(v=>!v)} title={showQty?'Switch to total':'Add qty × price'}
+        <button onClick={()=>{if(item.qty!==undefined){onUpdate('qty',undefined);onUpdate('unitPrice',undefined);}else{onUpdate('qty',1);onUpdate('unitPrice',item.value||0);}}}
+          title={item.qty!==undefined?'Flat value':'Qty × price'}
           className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-indigo-500 transition-all flex-shrink-0 text-xs">
-          {showQty?'—':'×'}
+          {item.qty!==undefined?'—':'×'}
         </button>
+        <TypeBadge/>
         <button onClick={onRemove} className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
-          <Icon name="x" size={12} />
+          <Icon name="x" size={12}/>
         </button>
       </div>
-      {isRevenue && showQty && showCost && (
-        <div className="flex items-center gap-1 pl-[calc(100%-24rem)] mt-0.5">
-          <span className="text-slate-300 flex-shrink-0 ml-auto">−</span>
-          <input type="number" value={item.unitCost??''} onChange={e=>handleUnitCostChange(e.target.value)}
-            className="cell-input w-20 text-right font-mono text-amber-600 dark:text-amber-400" placeholder="unit cost" title="Unit Cost" />
+      {isRev && item.qty !== undefined && showCost && (
+        <div className="flex items-center gap-1 mt-0.5">
+          <div className="flex-1"/>
+          <span className="text-slate-300 text-[10px] flex-shrink-0">− cost/unit</span>
+          <input type="number" value={item.unitCost??''} onChange={e=>onUpdate('unitCost',Number(e.target.value)||0)}
+            className="cell-input w-20 text-right font-mono text-amber-600 dark:text-amber-400" placeholder="unit cost"/>
           <span className="text-slate-300 flex-shrink-0">=</span>
           <span className={`w-20 text-right font-mono font-bold flex-shrink-0 ${netContrib>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(netContrib)}</span>
-          <div className="w-[calc(0.5rem+12px)] flex-shrink-0" />
-          <div className="w-[calc(0.5rem+12px)] flex-shrink-0" />
+          <div className="w-[38px] flex-shrink-0"/>
         </div>
       )}
     </div>
@@ -847,65 +892,86 @@ function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem,
   const [open, setOpen] = useState(true);
   const [showIcons, setShowIcons] = useState(false);
   const cur = useCur();
-  const isRev = cat.isRevenue;
-  const grossSub = (cat.items||[]).reduce((a,it)=>a+itemEffValue(it),0);
-  const cogSub = (cat.items||[]).reduce((a,it)=>a+itemCogValue(it),0);
-  const sub = isRev ? grossSub - cogSub : grossSub;
-  const borderCls = isRev
-    ? 'border-emerald-200 dark:border-emerald-800'
-    : 'border-slate-100 dark:border-slate-700';
+  const cm = calcCategoryMetrics(cat);
+  const defaultType = cat.isRevenue !== false ? 'revenue' : 'cost';
 
   return (
-    <div className="mb-2">
-      <div className="flex items-center gap-1 py-1 group/cat relative">
+    <div className="mb-3 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+      {/* Category header */}
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-slate-50 dark:bg-slate-800/80 group/cat relative">
         <button onClick={()=>setOpen(o=>!o)} className="text-slate-400 hover:text-slate-600 flex-shrink-0">
-          <Icon name={open?'chevDown':'chevRight'} size={13} />
+          <Icon name={open?'chevDown':'chevRight'} size={13}/>
         </button>
         {/* Icon picker */}
         <div className="relative flex-shrink-0">
-          <button onClick={()=>setShowIcons(v=>!v)} title="Set category icon"
-            className="text-sm leading-none hover:scale-110 transition-transform px-0.5">
-            {cat.icon || '❓'}
-          </button>
+          <button onClick={()=>setShowIcons(v=>!v)} title="Set icon"
+            className="text-sm leading-none hover:scale-110 transition-transform">{cat.icon||'❓'}</button>
           {showIcons && (
             <div className="absolute top-full left-0 z-30 mt-1 p-2 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-600 grid grid-cols-6 gap-0.5 w-44">
-              {CAT_ICONS.map(ic => (
+              {CAT_ICONS.map(ic=>(
                 <button key={ic} onClick={()=>{onUpdateCat('icon',ic);setShowIcons(false);}}
-                  className={`text-base p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors ${cat.icon===ic?'bg-indigo-100 dark:bg-indigo-900/40':''}`}>
-                  {ic}
-                </button>
+                  className={`text-base p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 ${cat.icon===ic?'bg-indigo-100 dark:bg-indigo-900/40':''}`}>{ic}</button>
               ))}
               <button onClick={()=>{onUpdateCat('icon','');setShowIcons(false);}}
-                className="col-span-6 text-[10px] text-slate-400 hover:text-red-500 py-1 mt-0.5 border-t border-slate-100 dark:border-slate-700">
-                Clear icon
-              </button>
+                className="col-span-6 text-[10px] text-slate-400 hover:text-red-500 py-1 mt-0.5 border-t border-slate-100 dark:border-slate-700">Clear</button>
             </div>
           )}
         </div>
         <input value={cat.name} onChange={e=>onUpdateCat('name',e.target.value)}
-          className="cell-input flex-1 min-w-0 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" />
-        <button onClick={()=>onUpdateCat('isRevenue',!cat.isRevenue)} title="Toggle Revenue / Expense"
-          className={`text-xs px-1.5 py-0.5 rounded font-medium transition-colors flex-shrink-0
-            ${isRev
-              ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
-              : 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400'}`}>
-          {isRev ? 'Revenue' : 'Expense'}
-        </button>
-        <span className={`text-xs font-mono font-semibold ml-1 flex-shrink-0 ${isRev?'text-emerald-600 dark:text-emerald-400':'text-slate-500'}`}>{cur(sub)}</span>
+          className="cell-input flex-1 min-w-0 text-xs font-bold text-slate-600 dark:text-slate-300"/>
+        {/* Mini P&L in header */}
+        <div className="hidden sm:flex items-center gap-2 text-[10px] font-mono flex-shrink-0">
+          <span className="text-emerald-600 dark:text-emerald-400" title="Revenue">{cur(cm.revenue)}</span>
+          <span className="text-slate-300">·</span>
+          <span className="text-red-500" title="Cost">({cur(cm.cost)})</span>
+          <span className="text-slate-300">·</span>
+          <span className={`font-bold ${cm.net>=0?'text-slate-700 dark:text-slate-100':'text-red-500'}`} title="Net">{cur(cm.net)}</span>
+        </div>
         <button onClick={onRemoveCat} className="opacity-0 group-hover/cat:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
-          <Icon name="x" size={12} />
+          <Icon name="x" size={12}/>
         </button>
       </div>
+
       {open && (
-        <div className={`pl-4 border-l-2 ${borderCls} ml-2`}>
+        <div className="px-3 pt-2 pb-3">
           {(cat.items||[]).map(item=>(
-            <LineItemRow key={item.id} item={item} isRevenue={isRev}
+            <LineItemRow key={item.id} item={item}
+              defaultType={defaultType}
+              catRevenue={cm.revenue}
+              catCost={cm.cost}
               onUpdate={(f,v)=>onUpdateItem(item.id,f,v)}
-              onRemove={()=>onRemoveItem(item.id)} />
+              onRemove={()=>onRemoveItem(item.id)}/>
           ))}
-          <button onClick={onAddItem} className="flex items-center gap-1 text-xs text-slate-400 hover:text-indigo-600 py-1 mt-0.5 transition-colors">
-            <Icon name="plus" size={11} />Add item
-          </button>
+          {/* Add buttons */}
+          <div className="flex gap-3 mt-1.5">
+            <button onClick={()=>onAddItem('revenue')}
+              className="flex items-center gap-0.5 text-[11px] text-emerald-600 hover:text-emerald-700 py-0.5 transition-colors">
+              <Icon name="plus" size={10}/>Rev item
+            </button>
+            <button onClick={()=>onAddItem('cost')}
+              className="flex items-center gap-0.5 text-[11px] text-red-400 hover:text-red-600 py-0.5 transition-colors">
+              <Icon name="plus" size={10}/>Cost item
+            </button>
+            <button onClick={()=>onAddItem('pct')}
+              className="flex items-center gap-0.5 text-[11px] text-amber-500 hover:text-amber-700 py-0.5 transition-colors">
+              <Icon name="plus" size={10}/>% item
+            </button>
+          </div>
+          {/* Category totals footer */}
+          <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 grid grid-cols-3 text-center gap-1">
+            <div>
+              <div className="text-[9px] uppercase tracking-wide text-slate-400">Revenue</div>
+              <div className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">{cur(cm.revenue)}</div>
+            </div>
+            <div>
+              <div className="text-[9px] uppercase tracking-wide text-slate-400">Cost</div>
+              <div className="text-xs font-mono font-semibold text-red-500">({cur(cm.cost)})</div>
+            </div>
+            <div>
+              <div className="text-[9px] uppercase tracking-wide text-slate-400">Net</div>
+              <div className={`text-xs font-mono font-bold ${cm.net>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(cm.net)}</div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -917,19 +983,6 @@ function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, o
   const col = SCOL[colIdx % 3] || SCOL[0];
   const cur = useCur();
   const m = useMemo(() => calcMetrics(scenario), [scenario]);
-  const revCats = (scenario.categories||[]).filter(c => c.isRevenue);
-  const expCats = (scenario.categories||[]).filter(c => !c.isRevenue);
-  const addRevCat = () => onAddCat('revenue');
-  const addExpCat = () => onAddCat('expense');
-
-  const catGroup = (cat) => (
-    <CategoryGroup key={cat.id} cat={cat}
-      onUpdateCat={(f,v)=>onUpdateCat(cat.id,f,v)}
-      onRemoveCat={()=>onRemoveCat(cat.id)}
-      onUpdateItem={(iid,f,v)=>onUpdateItem(cat.id,iid,f,v)}
-      onAddItem={()=>onAddItem(cat.id)}
-      onRemoveItem={(iid)=>onRemoveItem(cat.id,iid)} />
-  );
 
   return (
     <div className={`rounded-xl border-2 ${col.border} bg-white dark:bg-slate-800 shadow-sm flex flex-col min-w-0`}>
@@ -941,68 +994,29 @@ function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, o
           className="cell-input text-xs text-slate-500 dark:text-slate-400 w-full" placeholder="Add description…" />
       </div>
 
-      {/* Revenue section */}
-      <div className="px-4 pt-3 pb-2">
-        <div className="flex items-center justify-between mb-2">
-          <span className="flex items-center gap-1 min-w-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block flex-shrink-0" />
-            <input value={scenario.revenueLabel||'Revenue'} onChange={e=>onUpdate('revenueLabel',e.target.value)}
-              className="cell-input text-xs font-bold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 w-full min-w-0" />
-          </span>
-          <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400 flex-shrink-0 ml-1">{cur(m.revenue)}</span>
-        </div>
-        <div className="border border-emerald-100 dark:border-emerald-900/40 rounded-lg px-3 py-2 bg-emerald-50/30 dark:bg-emerald-900/10 min-h-[40px]">
-          {revCats.map(catGroup)}
-          <button onClick={addRevCat} className="flex items-center gap-1 text-xs text-emerald-500 hover:text-emerald-700 py-1 mt-0.5 transition-colors">
-            <Icon name="plus" size={11} />Add revenue category
-          </button>
-        </div>
-      </div>
-
-      {/* Expense section */}
-      <div className="px-4 pt-1 pb-2 flex-1">
-        <div className="flex items-center justify-between mb-2">
-          <span className="flex items-center gap-1 min-w-0">
-            <span className="w-2 h-2 rounded-full bg-red-400 inline-block flex-shrink-0" />
-            <input value={scenario.expenseLabel||'Expenses'} onChange={e=>onUpdate('expenseLabel',e.target.value)}
-              className="cell-input text-xs font-bold uppercase tracking-wide text-red-500 dark:text-red-400 w-full min-w-0" />
-          </span>
-          <span className="text-xs font-mono font-bold text-red-500 dark:text-red-400 flex-shrink-0 ml-1">{cur(m.expenses)}</span>
-        </div>
-        <div className="border border-red-100 dark:border-red-900/40 rounded-lg px-3 py-2 bg-red-50/20 dark:bg-red-900/10 min-h-[40px]">
-          {expCats.map(catGroup)}
-          <button onClick={addExpCat} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 mt-0.5 transition-colors">
-            <Icon name="plus" size={11} />Add expense category
-          </button>
-        </div>
+      {/* Segments */}
+      <div className="px-4 pt-3 pb-2 flex-1">
+        {(scenario.categories||[]).map(cat => (
+          <CategoryGroup key={cat.id} cat={cat}
+            onUpdateCat={(f,v)=>onUpdateCat(cat.id,f,v)}
+            onRemoveCat={()=>onRemoveCat(cat.id)}
+            onUpdateItem={(iid,f,v)=>onUpdateItem(cat.id,iid,f,v)}
+            onAddItem={(type)=>onAddItem(cat.id,type)}
+            onRemoveItem={(iid)=>onRemoveItem(cat.id,iid)} />
+        ))}
+        <button onClick={()=>onAddCat()} className="flex items-center gap-1 text-xs text-slate-400 hover:text-indigo-600 py-1 mt-1 transition-colors">
+          <Icon name="plus" size={11}/>Add segment
+        </button>
       </div>
 
       {/* Totals */}
       <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 rounded-b-xl space-y-1.5">
-        {/* Revenue row — prominent */}
         <div className="flex justify-between items-center rounded-lg px-2.5 py-1.5 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/40">
-          <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">{scenario.revenueLabel||'Revenue'}</span>
+          <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">Total Revenue</span>
           <span className="font-mono font-bold text-sm text-emerald-600 dark:text-emerald-400">{cur(m.revenue)}</span>
         </div>
-        {m.cogs > 0 && (
-          <>
-            <div className="flex justify-between text-xs px-1">
-              <span className="text-amber-600 dark:text-amber-400">− Cost of Revenue</span>
-              <span className="font-mono font-semibold text-amber-600 dark:text-amber-400">({cur(m.cogs)})</span>
-            </div>
-            <div className="flex justify-between items-center text-xs px-1 pt-0.5 border-t border-slate-200 dark:border-slate-600">
-              <span className="text-slate-600 dark:text-slate-300 font-semibold">Gross Profit</span>
-              <span className={`font-mono font-bold ${m.grossProfit>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.grossProfit)}</span>
-            </div>
-            <div className="flex justify-between text-[10px] px-1 pb-1 border-b border-slate-200 dark:border-slate-600">
-              <span className="text-slate-400">Gross Margin</span>
-              <span className={`font-mono ${m.grossMgn>=0?col.text:'text-red-500'}`}>{pct(m.grossMgn)}</span>
-            </div>
-          </>
-        )}
-        {/* Expense row — prominent */}
         <div className="flex justify-between items-center rounded-lg px-2.5 py-1.5 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/40">
-          <span className="text-xs font-bold text-red-600 dark:text-red-400">− {scenario.expenseLabel||'Expenses'}</span>
+          <span className="text-xs font-bold text-red-600 dark:text-red-400">− Total Cost</span>
           <span className="font-mono font-bold text-sm text-red-500 dark:text-red-400">({cur(m.expenses)})</span>
         </div>
         <div className="flex justify-between items-center pt-0.5 border-t border-slate-200 dark:border-slate-600">
@@ -1014,7 +1028,7 @@ function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, o
           <span className={`font-mono font-semibold ${m.margin>=0?col.text:'text-red-500'}`}>{pct(m.margin)}</span>
         </div>
         <button onClick={onSavePackage} className="w-full flex items-center justify-center gap-1.5 text-xs font-medium py-2 mt-1 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
-          <Icon name="pkg" size={13} />Save as Package
+          <Icon name="pkg" size={13}/>Save as Package
         </button>
       </div>
     </div>
@@ -1194,15 +1208,11 @@ function DonutChart({ segments, size=88 }) {
 function ScenarioPieBlock({ scenario, textCls }) {
   const cur = useCur();
   const m = calcMetrics(scenario);
-  const buildSegs = (isRev) => (scenario.categories||[])
-    .filter(c => c.isRevenue === isRev)
-    .map((cat,i) => {
-      const gross = (cat.items||[]).reduce((s,it)=>s+itemEffValue(it),0);
-      const cog   = (cat.items||[]).reduce((s,it)=>s+itemCogValue(it),0);
-      return { label:(cat.icon?cat.icon+' ':'')+cat.name, value:Math.max(0, isRev?gross-cog:gross), color:CHART_COLORS[i%CHART_COLORS.length] };
-    });
-  const revSegs = buildSegs(true);
-  const expSegs = buildSegs(false);
+  const catMets = (scenario.categories||[]).map(cat => ({ ...calcCategoryMetrics(cat), cat }));
+  const revSegs = catMets.filter(cm => cm.revenue > 0)
+    .map((cm, i) => ({ label:(cm.cat.icon?cm.cat.icon+' ':'')+cm.cat.name, value:cm.revenue, color:CHART_COLORS[i%CHART_COLORS.length] }));
+  const expSegs = catMets.filter(cm => cm.cost > 0)
+    .map((cm, i) => ({ label:(cm.cat.icon?cm.cat.icon+' ':'')+cm.cat.name, value:cm.cost, color:CHART_COLORS[i%CHART_COLORS.length] }));
   const Legend = ({segs}) => (
     <div className="space-y-0.5 mt-1">
       {segs.map((s,i) => (
@@ -1220,12 +1230,12 @@ function ScenarioPieBlock({ scenario, textCls }) {
       <p className={`text-xs font-bold mb-3 truncate ${textCls}`}>{scenario.label||scenario.name}</p>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 mb-1">{scenario.revenueLabel||'Revenue'} <span className="font-mono">{cur(m.revenue)}</span></p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 mb-1">Revenue <span className="font-mono">{cur(m.revenue)}</span></p>
           <div className="flex justify-center"><DonutChart segments={revSegs} size={80}/></div>
           <Legend segs={revSegs}/>
         </div>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-red-500 mb-1">{scenario.expenseLabel||'Expenses'} <span className="font-mono">{cur(m.expenses)}</span></p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-red-500 mb-1">Cost <span className="font-mono">{cur(m.expenses)}</span></p>
           <div className="flex justify-center"><DonutChart segments={expSegs} size={80}/></div>
           <Legend segs={expSegs}/>
         </div>
@@ -1270,7 +1280,7 @@ function ComparisonPairRow({ cmp, project, handlers, onSavePackage, onRemove, pa
   const makeH = (s, colIdx) => ({
     onUpdate:      (f,v)       => handlers.updScenario(s.id,f,v),
     onUpdateItem:  (c,iid,f,v) => handlers.updItem(s.id,c,iid,f,v),
-    onAddItem:     (cid)       => handlers.addItem(s.id,cid),
+    onAddItem:     (cid,type)  => handlers.addItem(s.id,cid,type),
     onRemoveItem:  (cid,iid)   => handlers.remItem(s.id,cid,iid),
     onAddCat:      (type)      => handlers.addCat(s.id, type),
     onRemoveCat:   (cid)       => handlers.remCat(s.id,cid),
@@ -1994,22 +2004,21 @@ function App() {
 
   const createProject = () => {
     const mkScenario = (label) => ({
-      id: uid(), label,
-      units: 0, pricePerUnit: 0,
-      assumptions: [],
+      id: uid(), label, subtitle: '', units: 0, revenuePerUnit: 0, assumptions: [],
       categories: [
-        { id: uid(), name: 'Direct Costs', isDirect: true,
-          items: [{ id: uid(), name: 'Item 1', value: 0 }] },
-        { id: uid(), name: 'Overhead',     isDirect: false,
-          items: [{ id: uid(), name: 'Item 1', value: 0 }] },
+        { id: uid(), name: 'Revenue', icon: '💰',
+          items: [{ id: uid(), name: 'Item 1', itemType: 'revenue', qty: 1, unitPrice: 0, value: 0 }] },
+        { id: uid(), name: 'Expenses', icon: '📋',
+          items: [{ id: uid(), name: 'Item 1', itemType: 'cost', qty: 1, unitPrice: 0, value: 0 }] },
       ],
     });
+    const sA = mkScenario('Option A'), sB = mkScenario('Option B');
     const proj = {
-      id: uid(),
-      name: 'New Project',
-      status: 'draft',
-      updatedAt: new Date().toISOString(),
-      scenarios: [mkScenario('Scenario A'), mkScenario('Scenario B'), mkScenario('Scenario C')],
+      id: uid(), name: 'New Project', status: 'draft',
+      currency: 'THB', isFavorite: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      comparisons: [{ id: uid(), leftId: sA.id, rightId: sB.id }],
+      scenarios: [sA, sB],
     };
     setProjects(prev => [proj, ...prev]);
     openProject(proj.id);
@@ -2087,16 +2096,15 @@ function App() {
   };
 
   // ── Category updates ─────────────────────────────────────────────────────
-  const addCat = (projectId, scenarioId, type='expense') => {
+  const addCat = (projectId, scenarioId) => {
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
       return {
         ...p,
         scenarios: p.scenarios.map(s => {
           if (s.id !== scenarioId) return s;
-          const isRevenue = type === 'revenue';
-          const newCat = { id: uid(), name: isRevenue ? 'Revenue' : 'New Category',
-            isRevenue, isDirectCost: false, items: [{ id: uid(), name: 'Item 1', qty: 1, unitPrice: 0, value: 0 }] };
+          const newCat = { id: uid(), name: 'New Segment', icon: '📦',
+            items: [{ id: uid(), name: 'Item 1', itemType: 'revenue', qty: 1, unitPrice: 0, value: 0 }] };
           return { ...s, categories: [...s.categories, newCat] };
         }),
       };
@@ -2106,14 +2114,16 @@ function App() {
   const addComparison = (projectId) => {
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
-      const mkScen = (label, idx) => ({
+      const mkScen = (label) => ({
         id: uid(), label, subtitle: '', units: 1, revenuePerUnit: 0, assumptions: [],
         categories: [
-          { id: uid(), name: 'Revenue', isRevenue: true, isDirectCost: false, items: [{ id: uid(), name: 'Item 1', qty: 1, unitPrice: 0, value: 0 }] },
-          { id: uid(), name: 'Expenses', isRevenue: false, isDirectCost: true, items: [{ id: uid(), name: 'Item 1', qty: 1, unitPrice: 0, value: 0 }] },
+          { id: uid(), name: 'Revenue', icon: '💰',
+            items: [{ id: uid(), name: 'Item 1', itemType: 'revenue', qty: 1, unitPrice: 0, value: 0 }] },
+          { id: uid(), name: 'Expenses', icon: '📋',
+            items: [{ id: uid(), name: 'Item 1', itemType: 'cost', qty: 1, unitPrice: 0, value: 0 }] },
         ],
       });
-      const sL = mkScen('Option A', 0), sR = mkScen('Option B', 1);
+      const sL = mkScen('Option A'), sR = mkScen('Option B');
       const newCmp = { id: uid(), leftId: sL.id, rightId: sR.id };
       return { ...p, scenarios: [...p.scenarios, sL, sR], comparisons: [...(p.comparisons||[]), newCmp] };
     }));
@@ -2159,7 +2169,7 @@ function App() {
   };
 
   // ── Line-item updates ────────────────────────────────────────────────────
-  const addItem = (projectId, scenarioId, catId) => {
+  const addItem = (projectId, scenarioId, catId, type='revenue') => {
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
       return {
@@ -2170,7 +2180,10 @@ function App() {
             ...s,
             categories: s.categories.map(c => {
               if (c.id !== catId) return c;
-              return { ...c, items: [...c.items, { id: uid(), name: 'New Item', value: 0 }] };
+              const newItem = type === 'pct'
+                ? { id: uid(), name: 'New %', itemType: 'pct', pctRate: 10, pctBase: 'cat_revenue' }
+                : { id: uid(), name: 'New Item', itemType: type, qty: 1, unitPrice: 0, value: 0 };
+              return { ...c, items: [...c.items, newItem] };
             }),
           };
         }),
@@ -2263,10 +2276,10 @@ function App() {
     updAssumption:  (sid, i, f, v)     => activeProject && updAssumption(activeProject.id, sid, i, f, v),
     addAssumption:  (sid)              => activeProject && addAssumption(activeProject.id, sid),
     remAssumption:  (sid, i)           => activeProject && remAssumption(activeProject.id, sid, i),
-    addCat:         (sid, type)        => activeProject && addCat(activeProject.id, sid, type),
+    addCat:         (sid)              => activeProject && addCat(activeProject.id, sid),
     remCat:         (sid, cid)         => activeProject && remCat(activeProject.id, sid, cid),
     updCat:         (sid, cid, f, v)   => activeProject && updCat(activeProject.id, sid, cid, f, v),
-    addItem:        (sid, cid)         => activeProject && addItem(activeProject.id, sid, cid),
+    addItem:        (sid, cid, type)   => activeProject && addItem(activeProject.id, sid, cid, type),
     remItem:        (sid, cid, iid)    => activeProject && remItem(activeProject.id, sid, cid, iid),
     updItem:        (sid, cid, iid, f, v) => activeProject && updItem(activeProject.id, sid, cid, iid, f, v),
     addComparison:  (pid)              => addComparison(pid),
