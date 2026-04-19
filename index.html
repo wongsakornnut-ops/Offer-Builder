@@ -41,39 +41,63 @@ const { useState, useEffect, useRef, useMemo, useCallback } = React;
 let _uidCounter = 1000;
 function uid() { return 'id' + (++_uidCounter) + Math.random().toString(36).slice(2,6); }
 
-function currency(n) {
-  if (n === null || n === undefined || isNaN(n)) return '$0';
+const CURRENCIES = {
+  THB: { symbol:'฿',  code:'THB', name:'Thai Baht',          decimals:0 },
+  USD: { symbol:'$',  code:'USD', name:'US Dollar',           decimals:2 },
+  EUR: { symbol:'€',  code:'EUR', name:'Euro',                decimals:2 },
+  GBP: { symbol:'£',  code:'GBP', name:'British Pound',       decimals:2 },
+  SGD: { symbol:'S$', code:'SGD', name:'Singapore Dollar',    decimals:2 },
+  JPY: { symbol:'¥',  code:'JPY', name:'Japanese Yen',        decimals:0 },
+};
+
+function fmtCurrency(n, code='THB') {
+  if (n === null || n === undefined || isNaN(n)) n = 0;
+  const { symbol, decimals } = CURRENCIES[code] || CURRENCIES.THB;
   const abs = Math.abs(n);
   const sign = n < 0 ? '-' : '';
-  if (abs >= 1000000) return sign + '$' + (abs/1000000).toFixed(1).replace(/\.0$/,'') + 'M';
-  if (abs >= 1000) return sign + '$' + (abs/1000).toFixed(1).replace(/\.0$/,'') + 'K';
-  return sign + '$' + abs.toLocaleString();
+  if (abs >= 1000000) return sign + symbol + (abs/1000000).toFixed(2).replace(/\.?0+$/,'') + 'M';
+  if (abs >= 1000)    return sign + symbol + (abs/1000).toFixed(1).replace(/\.0$/,'') + 'K';
+  return sign + symbol + abs.toLocaleString(undefined, { minimumFractionDigits:0, maximumFractionDigits:decimals });
 }
+
+function currency(n) { return fmtCurrency(n, 'THB'); }
 
 function pct(n) {
   if (n === null || n === undefined || isNaN(n)) return '0.0%';
   return n.toFixed(1) + '%';
 }
 
+function itemEffValue(item) {
+  if (item.qty !== undefined && item.unitPrice !== undefined)
+    return (Number(item.qty)||0) * (Number(item.unitPrice)||0);
+  return Number(item.value) || 0;
+}
+
 function calcMetrics(scenario) {
-  const units = Number(scenario.units) || 0;
-  const rpu = Number(scenario.revenuePerUnit) || 0;
-  const rev = units * rpu;
-  let tot = 0, direct = 0;
+  let revenue = 0, expenses = 0, direct = 0;
   (scenario.categories || []).forEach(cat => {
-    (cat.items || []).forEach(item => {
-      const v = Number(item.value) || 0;
-      tot += v;
-      if (cat.isDirectCost) direct += v;
-    });
+    const catTotal = (cat.items||[]).reduce((s,it) => s + itemEffValue(it), 0);
+    if (cat.isRevenue) revenue += catTotal;
+    else { expenses += catTotal; if (cat.isDirectCost) direct += catTotal; }
   });
-  const gross = rev - direct;
-  const net = rev - tot;
-  const grossMgn = rev > 0 ? (gross / rev) * 100 : 0;
-  const netMgn = rev > 0 ? (net / rev) * 100 : 0;
-  const cpu = units > 0 ? tot / units : 0;
-  const ppu = units > 0 ? net / units : 0;
-  return { rev, tot, direct, gross, net, grossMgn, netMgn, cpu, ppu };
+  if (revenue === 0) {
+    const u = Number(scenario.units)||0, rpu = Number(scenario.revenuePerUnit)||0;
+    if (u > 0 || rpu > 0) revenue = u * rpu;
+  }
+  const net = revenue - expenses;
+  const margin = revenue > 0 ? (net / revenue) * 100 : 0;
+  const gross = revenue - direct;
+  const grossMgn = revenue > 0 ? (gross / revenue) * 100 : 0;
+  const units = Number(scenario.units) || 1;
+  return { revenue, expenses, net, margin,
+    rev:revenue, tot:expenses, gross, direct, netMgn:margin, grossMgn,
+    cpu: expenses/units, ppu: net/units };
+}
+
+const CurrencyCtx = React.createContext('THB');
+function useCur() {
+  const code = React.useContext(CurrencyCtx);
+  return (n) => fmtCurrency(n, code);
 }
 
 const SCOL = [
@@ -88,6 +112,11 @@ const INIT_PROJECTS = [
     id:'p1', name:'Annual Conference — Venue & Format Options',
     description:'Comparing virtual, hybrid, and in-person event formats for the 2026 annual conference.',
     createdAt:'2026-03-01', updatedAt:'2026-03-28', status:'active', isFavorite:true,
+    currency:'USD',
+    comparisons:[
+      {id:'cmp1', leftId:'s1', rightId:'s2'},
+      {id:'cmp2', leftId:'s2', rightId:'s3'},
+    ],
     scenarios:[
       {
         id:'s1', label:'A', name:'Scenario A', subtitle:'Virtual Event',
@@ -99,22 +128,25 @@ const INIT_PROJECTS = [
           {id:'a5',label:'Platform',value:'Hopin+Zoom'},{id:'a6',label:'Team Size',value:'8 staff'},
         ],
         categories:[
-          { id:'c1', name:'Technology', isDirectCost:true, items:[
-            {id:'i1',name:'Platform License',value:12000},
-            {id:'i2',name:'AV & Streaming',value:8500},
-            {id:'i3',name:'Tech Support',value:4000},
+          { id:'c0r', name:'Ticket Sales', isRevenue:true, isDirectCost:false, items:[
+            {id:'i0r',name:'Virtual Ticket',qty:500,unitPrice:199,value:99500},
           ]},
-          { id:'c2', name:'Content & Speakers', isDirectCost:true, items:[
-            {id:'i4',name:'Speaker Fees',value:18000},
-            {id:'i5',name:'Content Production',value:10000},
+          { id:'c1', name:'Technology', isRevenue:false, isDirectCost:true, items:[
+            {id:'i1',name:'Platform License',qty:1,unitPrice:12000,value:12000},
+            {id:'i2',name:'AV & Streaming',qty:1,unitPrice:8500,value:8500},
+            {id:'i3',name:'Tech Support',qty:2,unitPrice:2000,value:4000},
           ]},
-          { id:'c3', name:'Marketing', isDirectCost:false, items:[
-            {id:'i6',name:'Digital Advertising',value:8000},
-            {id:'i7',name:'Email Campaigns',value:2000},
+          { id:'c2', name:'Content & Speakers', isRevenue:false, isDirectCost:true, items:[
+            {id:'i4',name:'Speaker Fees',qty:6,unitPrice:3000,value:18000},
+            {id:'i5',name:'Content Production',qty:1,unitPrice:10000,value:10000},
           ]},
-          { id:'c4', name:'Operations', isDirectCost:false, items:[
-            {id:'i8',name:'Staff Costs',value:7000},
-            {id:'i9',name:'Admin & Misc',value:2500},
+          { id:'c3', name:'Marketing', isRevenue:false, isDirectCost:false, items:[
+            {id:'i6',name:'Digital Advertising',qty:1,unitPrice:8000,value:8000},
+            {id:'i7',name:'Email Campaigns',qty:1,unitPrice:2000,value:2000},
+          ]},
+          { id:'c4', name:'Operations', isRevenue:false, isDirectCost:false, items:[
+            {id:'i8',name:'Staff Costs',qty:8,unitPrice:875,value:7000},
+            {id:'i9',name:'Admin & Misc',qty:1,unitPrice:2500,value:2500},
           ]},
         ],
       },
@@ -128,26 +160,30 @@ const INIT_PROJECTS = [
           {id:'b5',label:'Venue',value:'Convention Center'},{id:'b6',label:'Team Size',value:'15 staff'},
         ],
         categories:[
-          { id:'c5', name:'Technology', isDirectCost:true, items:[
-            {id:'i10',name:'Platform License',value:12000},
-            {id:'i11',name:'AV & Streaming',value:15000},
-            {id:'i12',name:'Tech Support',value:5000},
+          { id:'c5r', name:'Ticket Sales', isRevenue:true, isDirectCost:false, items:[
+            {id:'i5r',name:'In-Person Ticket',qty:200,unitPrice:380,value:76000},
+            {id:'i5r2',name:'Virtual Ticket',qty:200,unitPrice:380,value:76000},
           ]},
-          { id:'c6', name:'Content & Speakers', isDirectCost:true, items:[
-            {id:'i13',name:'Speaker Fees',value:20000},
-            {id:'i14',name:'Content Production',value:12000},
+          { id:'c5', name:'Technology', isRevenue:false, isDirectCost:true, items:[
+            {id:'i10',name:'Platform License',qty:1,unitPrice:12000,value:12000},
+            {id:'i11',name:'AV & Streaming',qty:1,unitPrice:15000,value:15000},
+            {id:'i12',name:'Tech Support',qty:2,unitPrice:2500,value:5000},
           ]},
-          { id:'c7', name:'Venue & F&B', isDirectCost:true, items:[
-            {id:'i15',name:'Venue Rental',value:10000},
-            {id:'i16',name:'Catering',value:8000},
+          { id:'c6', name:'Content & Speakers', isRevenue:false, isDirectCost:true, items:[
+            {id:'i13',name:'Speaker Fees',qty:6,unitPrice:3333,value:20000},
+            {id:'i14',name:'Content Production',qty:1,unitPrice:12000,value:12000},
           ]},
-          { id:'c8', name:'Marketing', isDirectCost:false, items:[
-            {id:'i17',name:'Digital Advertising',value:8000},
-            {id:'i18',name:'Print & Collateral',value:2000},
+          { id:'c7', name:'Venue & F&B', isRevenue:false, isDirectCost:true, items:[
+            {id:'i15',name:'Venue Rental',qty:2,unitPrice:5000,value:10000},
+            {id:'i16',name:'Catering',qty:200,unitPrice:40,value:8000},
           ]},
-          { id:'c9', name:'Operations', isDirectCost:false, items:[
-            {id:'i19',name:'Staff Costs',value:12000},
-            {id:'i20',name:'Admin & Misc',value:4000},
+          { id:'c8', name:'Marketing', isRevenue:false, isDirectCost:false, items:[
+            {id:'i17',name:'Digital Advertising',qty:1,unitPrice:8000,value:8000},
+            {id:'i18',name:'Print & Collateral',qty:1,unitPrice:2000,value:2000},
+          ]},
+          { id:'c9', name:'Operations', isRevenue:false, isDirectCost:false, items:[
+            {id:'i19',name:'Staff Costs',qty:15,unitPrice:800,value:12000},
+            {id:'i20',name:'Admin & Misc',qty:1,unitPrice:4000,value:4000},
           ]},
         ],
       },
@@ -161,27 +197,30 @@ const INIT_PROJECTS = [
           {id:'d5',label:'Venue',value:'5-Star Hotel'},{id:'d6',label:'Team Size',value:'25 staff'},
         ],
         categories:[
-          { id:'c10', name:'Technology', isDirectCost:true, items:[
-            {id:'i21',name:'AV & Production',value:18000},
-            {id:'i22',name:'Live Streaming',value:5000},
+          { id:'c10r', name:'Ticket Sales', isRevenue:true, isDirectCost:false, items:[
+            {id:'i10r',name:'Premium Ticket',qty:200,unitPrice:890,value:178000},
           ]},
-          { id:'c11', name:'Content & Speakers', isDirectCost:true, items:[
-            {id:'i23',name:'Speaker Fees',value:22000},
-            {id:'i24',name:'Content Production',value:10000},
-            {id:'i25',name:'Entertainment',value:5000},
+          { id:'c10', name:'Technology', isRevenue:false, isDirectCost:true, items:[
+            {id:'i21',name:'AV & Production',qty:1,unitPrice:18000,value:18000},
+            {id:'i22',name:'Live Streaming',qty:1,unitPrice:5000,value:5000},
           ]},
-          { id:'c12', name:'Venue & F&B', isDirectCost:true, items:[
-            {id:'i26',name:'Venue Rental',value:18000},
-            {id:'i27',name:'Premium Catering',value:14000},
+          { id:'c11', name:'Content & Speakers', isRevenue:false, isDirectCost:true, items:[
+            {id:'i23',name:'Speaker Fees',qty:6,unitPrice:3667,value:22000},
+            {id:'i24',name:'Content Production',qty:1,unitPrice:10000,value:10000},
+            {id:'i25',name:'Entertainment',qty:1,unitPrice:5000,value:5000},
           ]},
-          { id:'c13', name:'Marketing', isDirectCost:false, items:[
-            {id:'i28',name:'Digital Advertising',value:7000},
-            {id:'i29',name:'PR & Partnerships',value:5000},
+          { id:'c12', name:'Venue & F&B', isRevenue:false, isDirectCost:true, items:[
+            {id:'i26',name:'Venue Rental',qty:3,unitPrice:6000,value:18000},
+            {id:'i27',name:'Premium Catering',qty:200,unitPrice:70,value:14000},
           ]},
-          { id:'c14', name:'Operations', isDirectCost:false, items:[
-            {id:'i30',name:'Staff Costs',value:12000},
-            {id:'i31',name:'Logistics',value:4000},
-            {id:'i32',name:'Admin & Misc',value:2000},
+          { id:'c13', name:'Marketing', isRevenue:false, isDirectCost:false, items:[
+            {id:'i28',name:'Digital Advertising',qty:1,unitPrice:7000,value:7000},
+            {id:'i29',name:'PR & Partnerships',qty:1,unitPrice:5000,value:5000},
+          ]},
+          { id:'c14', name:'Operations', isRevenue:false, isDirectCost:false, items:[
+            {id:'i30',name:'Staff Costs',qty:25,unitPrice:480,value:12000},
+            {id:'i31',name:'Logistics',qty:1,unitPrice:4000,value:4000},
+            {id:'i32',name:'Admin & Misc',qty:1,unitPrice:2000,value:2000},
           ]},
         ],
       },
@@ -191,6 +230,8 @@ const INIT_PROJECTS = [
     id:'p2', name:'SaaS GTM — Channel Strategy Comparison',
     description:'Comparing product-led, sales-led, and partner distribution strategies.',
     createdAt:'2026-02-10', updatedAt:'2026-03-15', status:'draft', isFavorite:false,
+    currency:'USD',
+    comparisons:[{id:'cmp3', leftId:'s4', rightId:'s5'}],
     scenarios:[
       {
         id:'s4', label:'A', name:'Scenario A', subtitle:'PLG — Product-Led',
@@ -707,15 +748,47 @@ function AssumptionsPanel({ scenarios, onUpdate, onAdd, onRemove }) {
 
 // ── Line Item Row ──────────────────────────────────────────────────────────
 function LineItemRow({ item, onUpdate, onRemove }) {
+  const cur = useCur();
+  const hasQty = item.qty !== undefined;
+  const total = itemEffValue(item);
+  const [showQty, setShowQty] = useState(hasQty);
+
+  const handleUnitPriceChange = (v) => {
+    const num = Number(v) || 0;
+    onUpdate('unitPrice', num);
+    if (!hasQty) { onUpdate('qty', 1); }
+    onUpdate('value', (Number(item.qty)||1) * num);
+  };
+  const handleQtyChange = (v) => {
+    const num = Number(v) || 0;
+    onUpdate('qty', num);
+    onUpdate('value', num * (Number(item.unitPrice) || Number(item.value) || 0));
+  };
+
   return (
-    <div className="flex items-center gap-1 py-1 group/item">
+    <div className="flex items-center gap-1 py-1 group/item text-xs">
       <input type="text" value={item.name} onChange={e=>onUpdate('name',e.target.value)}
-        className="cell-input flex-1 min-w-0 text-sm text-slate-700 dark:text-slate-200" placeholder="Item name…" />
-      <span className="text-slate-400 text-xs flex-shrink-0">$</span>
-      <input type="number" value={item.value||''} onChange={e=>onUpdate('value',Number(e.target.value)||0)}
-        className="cell-input w-24 text-right text-sm font-mono" placeholder="0" />
+        className="cell-input flex-1 min-w-0 text-slate-700 dark:text-slate-200" placeholder="Item name…" />
+      {showQty ? (
+        <>
+          <input type="number" value={item.qty??1} onChange={e=>handleQtyChange(e.target.value)}
+            className="cell-input w-12 text-right font-mono text-slate-500" placeholder="qty" title="Quantity" />
+          <span className="text-slate-300 flex-shrink-0">×</span>
+          <input type="number" value={item.unitPrice??''} onChange={e=>handleUnitPriceChange(e.target.value)}
+            className="cell-input w-20 text-right font-mono text-slate-600 dark:text-slate-300" placeholder="unit price" title="Unit Price" />
+          <span className="text-slate-300 flex-shrink-0">=</span>
+          <span className="w-20 text-right font-mono font-semibold text-slate-700 dark:text-slate-200 flex-shrink-0">{cur(total)}</span>
+        </>
+      ) : (
+        <input type="number" value={item.value||''} onChange={e=>onUpdate('value',Number(e.target.value)||0)}
+          className="cell-input w-24 text-right font-mono" placeholder="0" />
+      )}
+      <button onClick={()=>setShowQty(v=>!v)} title={showQty?'Switch to total':'Add qty × price'}
+        className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-indigo-500 transition-all flex-shrink-0 text-xs">
+        {showQty?'—':'×'}
+      </button>
       <button onClick={onRemove} className="opacity-0 group-hover/item:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
-        <Icon name="x" size={13} />
+        <Icon name="x" size={12} />
       </button>
     </div>
   );
@@ -724,7 +797,13 @@ function LineItemRow({ item, onUpdate, onRemove }) {
 // ── Category Group ─────────────────────────────────────────────────────────
 function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem, onRemoveItem }) {
   const [open, setOpen] = useState(true);
-  const sub = (cat.items||[]).reduce((a,it)=>a+(Number(it.value)||0),0);
+  const cur = useCur();
+  const sub = (cat.items||[]).reduce((a,it)=>a+itemEffValue(it),0);
+  const isRev = cat.isRevenue;
+  const borderCls = isRev
+    ? 'border-emerald-200 dark:border-emerald-800'
+    : 'border-slate-100 dark:border-slate-700';
+
   return (
     <div className="mb-2">
       <div className="flex items-center gap-1 py-1 group/cat">
@@ -733,17 +812,20 @@ function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem,
         </button>
         <input value={cat.name} onChange={e=>onUpdateCat('name',e.target.value)}
           className="cell-input flex-1 min-w-0 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" />
-        <button onClick={()=>onUpdateCat('isDirectCost',!cat.isDirectCost)} title={cat.isDirectCost?'Direct cost':'Overhead — click to toggle'}
-          className={`text-xs px-1.5 py-0.5 rounded font-medium transition-colors flex-shrink-0 ${cat.isDirectCost?'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300':'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400'}`}>
-          {cat.isDirectCost?'Direct':'OH'}
+        <button onClick={()=>onUpdateCat('isRevenue',!cat.isRevenue)} title="Toggle Revenue / Expense"
+          className={`text-xs px-1.5 py-0.5 rounded font-medium transition-colors flex-shrink-0
+            ${isRev
+              ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300'
+              : 'bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400'}`}>
+          {isRev ? 'Revenue' : 'Expense'}
         </button>
-        <span className="text-xs font-mono font-semibold text-slate-500 ml-1 flex-shrink-0">{currency(sub)}</span>
+        <span className={`text-xs font-mono font-semibold ml-1 flex-shrink-0 ${isRev?'text-emerald-600 dark:text-emerald-400':'text-slate-500'}`}>{cur(sub)}</span>
         <button onClick={onRemoveCat} className="opacity-0 group-hover/cat:opacity-100 p-0.5 text-slate-300 hover:text-red-500 transition-all flex-shrink-0">
           <Icon name="x" size={12} />
         </button>
       </div>
       {open && (
-        <div className="pl-4 border-l-2 border-slate-100 dark:border-slate-700 ml-2">
+        <div className={`pl-4 border-l-2 ${borderCls} ml-2`}>
           {(cat.items||[]).map(item=>(
             <LineItemRow key={item.id} item={item}
               onUpdate={(f,v)=>onUpdateItem(item.id,f,v)}
@@ -758,68 +840,86 @@ function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem,
   );
 }
 
-// ── Scenario Card ──────────────────────────────────────────────────────────
-function ScenarioCard({ scenario, ci, onUpdate, onUpdateItem, onAddItem, onRemoveItem, onAddCat, onRemoveCat, onUpdateCat, onSavePackage }) {
-  const col = SCOL[ci] || SCOL[0];
-  const m = useMemo(()=>calcMetrics(scenario),[scenario]);
+// ── Scenario Column (2-column comparison card) ────────────────────────────
+function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, onRemoveItem, onAddCat, onRemoveCat, onUpdateCat, onSavePackage }) {
+  const col = SCOL[colIdx % 3] || SCOL[0];
+  const cur = useCur();
+  const m = useMemo(() => calcMetrics(scenario), [scenario]);
+  const revCats = (scenario.categories||[]).filter(c => c.isRevenue);
+  const expCats = (scenario.categories||[]).filter(c => !c.isRevenue);
+  const addRevCat = () => onAddCat('revenue');
+  const addExpCat = () => onAddCat('expense');
+
+  const catGroup = (cat) => (
+    <CategoryGroup key={cat.id} cat={cat}
+      onUpdateCat={(f,v)=>onUpdateCat(cat.id,f,v)}
+      onRemoveCat={()=>onRemoveCat(cat.id)}
+      onUpdateItem={(iid,f,v)=>onUpdateItem(cat.id,iid,f,v)}
+      onAddItem={()=>onAddItem(cat.id)}
+      onRemoveItem={(iid)=>onRemoveItem(cat.id,iid)} />
+  );
+
   return (
-    <div className={`rounded-xl border-2 ${col.border} bg-white dark:bg-slate-800 shadow-sm flex flex-col`}>
+    <div className={`rounded-xl border-2 ${col.border} bg-white dark:bg-slate-800 shadow-sm flex flex-col min-w-0`}>
+      {/* Header */}
       <div className={`${col.lightBg} rounded-t-xl px-4 py-3 border-b ${col.border}`}>
-        <div className="flex items-center gap-2 mb-1">
-          <span className={`w-6 h-6 rounded-full ${col.bg} text-white text-xs font-bold flex items-center justify-center flex-shrink-0`}>{col.label}</span>
-          <input value={scenario.name} onChange={e=>onUpdate('name',e.target.value)}
-            className={`cell-input font-semibold text-sm ${col.text} flex-1`} />
-        </div>
+        <input value={scenario.label||scenario.name||''} onChange={e=>onUpdate('label',e.target.value)}
+          className={`cell-input font-bold text-base ${col.text} w-full mb-0.5`} placeholder="Scenario name…" />
         <input value={scenario.subtitle||''} onChange={e=>onUpdate('subtitle',e.target.value)}
-          className="cell-input text-xs text-slate-500 dark:text-slate-400 w-full" placeholder="Add subtitle…" />
+          className="cell-input text-xs text-slate-500 dark:text-slate-400 w-full" placeholder="Add description…" />
       </div>
-      <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Revenue</p>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-slate-400 block mb-0.5">Units</label>
-            <input type="number" value={scenario.units||''} onChange={e=>onUpdate('units',Number(e.target.value)||0)}
-              className="cell-input font-mono text-right w-full text-sm" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 block mb-0.5">Price/unit ($)</label>
-            <input type="number" value={scenario.revenuePerUnit||''} onChange={e=>onUpdate('revenuePerUnit',Number(e.target.value)||0)}
-              className="cell-input font-mono text-right w-full text-sm" />
-          </div>
+
+      {/* Revenue section */}
+      <div className="px-4 pt-3 pb-2">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-bold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Revenue
+          </span>
+          <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">{cur(m.revenue)}</span>
         </div>
-        <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 dark:border-slate-700">
-          <span className="text-xs text-slate-500">Total Revenue</span>
-          <span className={`font-bold text-sm ${col.text}`}>{currency(m.rev)}</span>
+        <div className="border border-emerald-100 dark:border-emerald-900/40 rounded-lg px-3 py-2 bg-emerald-50/30 dark:bg-emerald-900/10 min-h-[40px]">
+          {revCats.map(catGroup)}
+          <button onClick={addRevCat} className="flex items-center gap-1 text-xs text-emerald-500 hover:text-emerald-700 py-1 mt-0.5 transition-colors">
+            <Icon name="plus" size={11} />Add revenue category
+          </button>
         </div>
       </div>
-      <div className="px-4 py-3 flex-1">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Cost Items</p>
-        {(scenario.categories||[]).map(cat=>(
-          <CategoryGroup key={cat.id} cat={cat}
-            onUpdateCat={(f,v)=>onUpdateCat(cat.id,f,v)}
-            onRemoveCat={()=>onRemoveCat(cat.id)}
-            onUpdateItem={(iid,f,v)=>onUpdateItem(cat.id,iid,f,v)}
-            onAddItem={()=>onAddItem(cat.id)}
-            onRemoveItem={(iid)=>onRemoveItem(cat.id,iid)} />
-        ))}
-        <button onClick={onAddCat} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-indigo-600 py-1 mt-1 transition-colors">
-          <Icon name="plus" size={13} />Add category
-        </button>
-      </div>
-      <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 rounded-b-xl">
-        <div className="space-y-1 text-sm mb-3">
-          {[['Total Cost',currency(m.tot),''],['Gross Profit',currency(m.gross),m.gross>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'],['Net Profit',currency(m.net),m.net>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'],['Net Margin',pct(m.netMgn),m.netMgn>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500']].map(([l,v,c])=>(
-            <div key={l} className="flex justify-between">
-              <span className="text-slate-500 text-xs">{l}</span>
-              <span className={`font-mono font-semibold text-xs ${c}`}>{v}</span>
-            </div>
-          ))}
-          <div className="flex justify-between pt-1 border-t border-slate-200 dark:border-slate-700">
-            <span className="text-xs text-slate-400">Cost/unit · Profit/unit</span>
-            <span className="text-xs font-mono text-slate-500">{currency(m.cpu)} · {currency(m.ppu)}</span>
-          </div>
+
+      {/* Expense section */}
+      <div className="px-4 pt-1 pb-2 flex-1">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-bold uppercase tracking-wide text-red-500 dark:text-red-400 flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-red-400 inline-block" />Expenses
+          </span>
+          <span className="text-xs font-mono font-bold text-red-500 dark:text-red-400">{cur(m.expenses)}</span>
         </div>
-        <button onClick={onSavePackage} className="w-full flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+        <div className="border border-red-100 dark:border-red-900/40 rounded-lg px-3 py-2 bg-red-50/20 dark:bg-red-900/10 min-h-[40px]">
+          {expCats.map(catGroup)}
+          <button onClick={addExpCat} className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 mt-0.5 transition-colors">
+            <Icon name="plus" size={11} />Add expense category
+          </button>
+        </div>
+      </div>
+
+      {/* Totals */}
+      <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 rounded-b-xl space-y-1.5">
+        <div className="flex justify-between text-xs">
+          <span className="text-slate-500">Total Revenue</span>
+          <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">{cur(m.revenue)}</span>
+        </div>
+        <div className="flex justify-between text-xs">
+          <span className="text-slate-500">Total Expenses</span>
+          <span className="font-mono font-semibold text-red-500">{cur(m.expenses)}</span>
+        </div>
+        <div className="flex justify-between text-xs pt-1.5 border-t border-slate-200 dark:border-slate-600">
+          <span className="font-semibold text-slate-700 dark:text-slate-200">Net Profit</span>
+          <span className={`font-mono font-bold ${m.net>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.net)}</span>
+        </div>
+        <div className="flex justify-between text-xs">
+          <span className="text-slate-400">Margin</span>
+          <span className={`font-mono font-semibold ${m.margin>=0?col.text:'text-red-500'}`}>{pct(m.margin)}</span>
+        </div>
+        <button onClick={onSavePackage} className="w-full flex items-center justify-center gap-1.5 text-xs font-medium py-2 mt-1 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
           <Icon name="pkg" size={13} />Save as Package
         </button>
       </div>
@@ -958,25 +1058,88 @@ function AIInsightPanel({ scenarios }) {
   );
 }
 
-// ── Scenario Compare Screen ────────────────────────────────────────────────
-function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, setDarkMode }) {
-  const [mobileTab, setMobileTab] = useState(0);
-  const [cmpSection, setCmpSection] = useState('table');
-  const scenarios = project.scenarios || [];
+// ── Comparison Pair Row ───────────────────────────────────────────────────
+function ComparisonPairRow({ cmp, project, handlers, onSavePackage, onRemove, pairIdx }) {
+  const cur = useCur();
+  const left = project.scenarios.find(s => s.id === cmp.leftId);
+  const right = project.scenarios.find(s => s.id === cmp.rightId);
+  if (!left || !right) return null;
+  const mL = calcMetrics(left), mR = calcMetrics(right);
+  const diff = mR.net - mL.net;
+  const better = diff > 0 ? 'right' : diff < 0 ? 'left' : 'tie';
 
-  const makeCardHandlers = (s) => ({
-    onUpdate:      (f,v)     => handlers.updScenario(s.id,f,v),
-    onUpdateItem:  (c,i,f,v) => handlers.updItem(s.id,c,i,f,v),
-    onAddItem:     (c)       => handlers.addItem(s.id,c),
-    onRemoveItem:  (c,i)     => handlers.remItem(s.id,c,i),
-    onAddCat:      ()        => handlers.addCat(s.id),
-    onRemoveCat:   (c)       => handlers.remCat(s.id,c),
-    onUpdateCat:   (c,f,v)   => handlers.updCat(s.id,c,f,v),
-    onSavePackage: ()        => onSavePackage(s),
+  const makeH = (s, colIdx) => ({
+    onUpdate:      (f,v)       => handlers.updScenario(s.id,f,v),
+    onUpdateItem:  (c,iid,f,v) => handlers.updItem(s.id,c,iid,f,v),
+    onAddItem:     (cid)       => handlers.addItem(s.id,cid),
+    onRemoveItem:  (cid,iid)   => handlers.remItem(s.id,cid,iid),
+    onAddCat:      (type)      => handlers.addCat(s.id, type),
+    onRemoveCat:   (cid)       => handlers.remCat(s.id,cid),
+    onUpdateCat:   (cid,f,v)   => handlers.updCat(s.id,cid,f,v),
+    onSavePackage: ()          => onSavePackage(s),
+    colIdx,
   });
 
   return (
+    <div className="mb-6">
+      {/* Pair header */}
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+          <span className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-bold text-slate-500">
+            {pairIdx+1}
+          </span>
+          Comparison {pairIdx+1}
+          <span className="font-normal text-slate-400">—</span>
+          <span className="font-normal text-slate-500 text-xs truncate max-w-48">
+            {left.label||left.name} vs {right.label||right.name}
+          </span>
+        </h3>
+        <button onClick={onRemove} className="text-xs text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20">
+          <Icon name="x" size={13} />Clear
+        </button>
+      </div>
+
+      {/* Two columns */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ScenarioColumn scenario={left}  colIdx={pairIdx*2}   {...makeH(left,  pairIdx*2)} />
+        <ScenarioColumn scenario={right} colIdx={pairIdx*2+1} {...makeH(right, pairIdx*2+1)} />
+      </div>
+
+      {/* Net diff summary bar */}
+      <div className={`mt-3 px-4 py-2.5 rounded-xl flex items-center justify-between text-sm
+        ${better==='tie'?'bg-slate-100 dark:bg-slate-800':'bg-slate-50 dark:bg-slate-800'}`}>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span className="font-semibold">{left.label||left.name}</span>
+          <span>Revenue {cur(mL.revenue)} · Expenses {cur(mL.expenses)} · Net</span>
+          <span className={`font-bold ${mL.net>=0?'text-emerald-600':'text-red-500'}`}>{cur(mL.net)}</span>
+          <span className="text-slate-300">({pct(mL.margin)})</span>
+        </div>
+        <div className={`text-xs font-bold px-2 py-1 rounded-lg ${
+          better==='right'?'text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/30':
+          better==='left'?'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30':
+          'text-slate-500 bg-slate-200'}`}>
+          {better==='tie'?'Equal':better==='right'?`▶ ${right.label||right.name} +${cur(Math.abs(diff))}`:`◀ ${left.label||left.name} +${cur(Math.abs(diff))}`}
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span className={`font-bold ${mR.net>=0?'text-emerald-600':'text-red-500'}`}>{cur(mR.net)}</span>
+          <span className="text-slate-300">({pct(mR.margin)})</span>
+          <span>Net · Revenue {cur(mR.revenue)} · Expenses {cur(mR.expenses)}</span>
+          <span className="font-semibold">{right.label||right.name}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Scenario Compare Screen ────────────────────────────────────────────────
+function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, setDarkMode }) {
+  const comparisons = project.comparisons || [];
+  const currCode = project.currency || 'THB';
+
+  return (
+    <CurrencyCtx.Provider value={currCode}>
     <div className="min-h-screen">
+      {/* Sticky header */}
       <div className="sticky top-0 z-20 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 px-4 sm:px-6">
         <div className="max-w-screen-xl mx-auto flex items-center gap-3 h-14">
           <button onClick={onBack} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
@@ -984,83 +1147,52 @@ function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, s
           </button>
           <input value={project.name} onChange={e=>handlers.updProject('name',e.target.value)}
             className="cell-input flex-1 min-w-0 font-semibold text-sm" />
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Btn v="secondary" sz="sm" onClick={()=>{}} title="Export (placeholder)">
-              <Icon name="download" size={14} /><span className="hidden sm:inline">Export</span>
-            </Btn>
-            <Btn v="primary" sz="sm" onClick={handlers.saveDraft}>
-              <Icon name="save" size={14} /><span className="hidden sm:inline">Save</span>
-            </Btn>
-            <Btn v="ghost" sz="icon" onClick={()=>setDarkMode(!darkMode)}>
-              <Icon name={darkMode?'sun':'moon'} size={16} />
-            </Btn>
-          </div>
+          {/* Currency picker */}
+          <select value={currCode} onChange={e=>handlers.updProject('currency',e.target.value)}
+            className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-indigo-400 outline-none">
+            {Object.values(CURRENCIES).map(c=>(
+              <option key={c.code} value={c.code}>{c.symbol} {c.code}</option>
+            ))}
+          </select>
+          <Btn v="primary" sz="sm" onClick={handlers.saveDraft}>
+            <Icon name="save" size={14} /><span className="hidden sm:inline">Save</span>
+          </Btn>
+          <Btn v="ghost" sz="icon" onClick={()=>setDarkMode(!darkMode)}>
+            <Icon name={darkMode?'sun':'moon'} size={16} />
+          </Btn>
         </div>
       </div>
 
-      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
-        <AssumptionsPanel scenarios={scenarios}
-          onUpdate={handlers.updAssumption}
-          onAdd={handlers.addAssumption}
-          onRemove={handlers.remAssumption} />
-
-        {/* Mobile scenario tabs */}
-        <div className="flex lg:hidden border-b border-slate-200 dark:border-slate-700 mb-4 overflow-x-auto -mx-4 sm:-mx-6 px-4 sm:px-6">
-          {scenarios.map((s,i)=>(
-            <button key={s.id} onClick={()=>setMobileTab(i)}
-              className={`px-4 py-2.5 text-xs font-medium border-b-2 whitespace-nowrap flex items-center gap-1.5 transition-colors flex-shrink-0 ${mobileTab===i?'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400':'border-transparent text-slate-500'}`}>
-              <span className="w-4 h-4 rounded-full text-white text-xs flex items-center justify-center font-bold" style={{background:SCOL[i]?.dot}}>{SCOL[i]?.label}</span>
-              <span className="max-w-24 truncate">{s.subtitle||s.name}</span>
-            </button>
-          ))}
-          <button onClick={()=>setMobileTab(3)}
-            className={`px-4 py-2.5 text-xs font-medium border-b-2 whitespace-nowrap flex items-center gap-1.5 flex-shrink-0 ${mobileTab===3?'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400':'border-transparent text-slate-500'}`}>
-            <Icon name="bar" size={13} />Compare
-          </button>
-        </div>
-
-        {/* Desktop: 3-column scenario cards */}
-        <div className="hidden lg:grid grid-cols-3 gap-4 mb-6">
-          {scenarios.map((s,i)=>(
-            <ScenarioCard key={s.id} scenario={s} ci={i} {...makeCardHandlers(s)} />
-          ))}
-        </div>
-
-        {/* Mobile: single scenario OR compare tab */}
-        <div className="lg:hidden mb-4">
-          {mobileTab < 3 && scenarios[mobileTab] && (
-            <ScenarioCard scenario={scenarios[mobileTab]} ci={mobileTab} {...makeCardHandlers(scenarios[mobileTab])} />
-          )}
-          {mobileTab === 3 && (
-            <div className="space-y-4">
-              <Card cls="overflow-hidden"><ComparisonTable scenarios={scenarios} /></Card>
-              <VarianceSection scenarios={scenarios} />
-              <Card><AIInsightPanel scenarios={scenarios} /></Card>
-            </div>
-          )}
-        </div>
-
-        {/* Desktop: comparison sections */}
-        <div className="hidden lg:block">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold flex items-center gap-2 text-sm"><Icon name="bar" size={16} cls="text-slate-400" />Scenario Comparison</h2>
-            <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 rounded-lg p-1">
-              {[['table','Summary'],['variance','Variance'],['ai','AI Insights']].map(([k,l])=>(
-                <button key={k} onClick={()=>setCmpSection(k)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${cmpSection===k?'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 shadow-sm':'text-slate-500 hover:text-slate-700'}`}>
-                  {l}
-                </button>
-              ))}
-            </div>
+      <div className="max-w-screen-xl mx-auto px-4 sm:px-6 py-6 space-y-2">
+        {comparisons.length === 0 && (
+          <div className="text-center py-16">
+            <Icon name="bar" size={40} cls="mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+            <p className="font-semibold text-slate-500 mb-1">No comparisons yet</p>
+            <p className="text-slate-400 text-sm mb-4">Add a comparison to start side-by-side analysis.</p>
           </div>
-          <Card cls="overflow-hidden">
-            {cmpSection==='table' && <ComparisonTable scenarios={scenarios} />}
-            {cmpSection==='variance' && <div className="p-4"><VarianceSection scenarios={scenarios} /></div>}
-            {cmpSection==='ai' && <AIInsightPanel scenarios={scenarios} />}
-          </Card>
-        </div>
+        )}
+
+        {comparisons.map((cmp, idx) => (
+          <ComparisonPairRow
+            key={cmp.id}
+            cmp={cmp}
+            project={project}
+            handlers={handlers}
+            onSavePackage={onSavePackage}
+            onRemove={() => handlers.removeComparison(project.id, cmp.id)}
+            pairIdx={idx}
+          />
+        ))}
+
+        {/* Add Comparison button */}
+        <button
+          onClick={() => handlers.addComparison(project.id)}
+          className="w-full py-3 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-700 text-slate-400 hover:text-indigo-600 hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium">
+          <Icon name="plus" size={16} />Add Comparison
+        </button>
       </div>
     </div>
+    </CurrencyCtx.Provider>
   );
 }
 
@@ -1707,16 +1839,47 @@ function App() {
   };
 
   // ── Category updates ─────────────────────────────────────────────────────
-  const addCat = (projectId, scenarioId) => {
+  const addCat = (projectId, scenarioId, type='expense') => {
     setProjects(prev => prev.map(p => {
       if (p.id !== projectId) return p;
       return {
         ...p,
         scenarios: p.scenarios.map(s => {
           if (s.id !== scenarioId) return s;
-          const newCat = { id: uid(), name: 'New Category', isDirect: false, items: [{ id: uid(), name: 'Item 1', value: 0 }] };
+          const isRevenue = type === 'revenue';
+          const newCat = { id: uid(), name: isRevenue ? 'Revenue' : 'New Category',
+            isRevenue, isDirectCost: false, items: [{ id: uid(), name: 'Item 1', qty: 1, unitPrice: 0, value: 0 }] };
           return { ...s, categories: [...s.categories, newCat] };
         }),
+      };
+    }));
+  };
+
+  const addComparison = (projectId) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      const mkScen = (label, idx) => ({
+        id: uid(), label, subtitle: '', units: 1, revenuePerUnit: 0, assumptions: [],
+        categories: [
+          { id: uid(), name: 'Revenue', isRevenue: true, isDirectCost: false, items: [{ id: uid(), name: 'Item 1', qty: 1, unitPrice: 0, value: 0 }] },
+          { id: uid(), name: 'Expenses', isRevenue: false, isDirectCost: true, items: [{ id: uid(), name: 'Item 1', qty: 1, unitPrice: 0, value: 0 }] },
+        ],
+      });
+      const sL = mkScen('Option A', 0), sR = mkScen('Option B', 1);
+      const newCmp = { id: uid(), leftId: sL.id, rightId: sR.id };
+      return { ...p, scenarios: [...p.scenarios, sL, sR], comparisons: [...(p.comparisons||[]), newCmp] };
+    }));
+  };
+
+  const removeComparison = (projectId, cmpId) => {
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      const cmp = (p.comparisons||[]).find(c => c.id === cmpId);
+      const removedIds = cmp ? [cmp.leftId, cmp.rightId] : [];
+      return {
+        ...p,
+        comparisons: (p.comparisons||[]).filter(c => c.id !== cmpId),
+        scenarios: p.scenarios.filter(s => !removedIds.includes(s.id)),
       };
     }));
   };
@@ -1846,18 +2009,20 @@ function App() {
 
   // ── Handlers bundle ───────────────────────────────────────────────────────
   const handlers = {
-    updProject,
-    saveDraft,
-    updScenario:    (sid, f, v)       => activeProject && updScenario(activeProject.id, sid, f, v),
-    updAssumption:  (sid, i, f, v)    => activeProject && updAssumption(activeProject.id, sid, i, f, v),
-    addAssumption:  (sid)             => activeProject && addAssumption(activeProject.id, sid),
-    remAssumption:  (sid, i)          => activeProject && remAssumption(activeProject.id, sid, i),
-    addCat:         (sid)             => activeProject && addCat(activeProject.id, sid),
-    remCat:         (sid, cid)        => activeProject && remCat(activeProject.id, sid, cid),
-    updCat:         (sid, cid, f, v)  => activeProject && updCat(activeProject.id, sid, cid, f, v),
-    addItem:        (sid, cid)        => activeProject && addItem(activeProject.id, sid, cid),
-    remItem:        (sid, cid, iid)   => activeProject && remItem(activeProject.id, sid, cid, iid),
+    updProject:     (f, v)             => activeProject && updProject(activeProject.id, f, v),
+    saveDraft:      ()                 => activeProject && saveDraft(activeProject.id),
+    updScenario:    (sid, f, v)        => activeProject && updScenario(activeProject.id, sid, f, v),
+    updAssumption:  (sid, i, f, v)     => activeProject && updAssumption(activeProject.id, sid, i, f, v),
+    addAssumption:  (sid)              => activeProject && addAssumption(activeProject.id, sid),
+    remAssumption:  (sid, i)           => activeProject && remAssumption(activeProject.id, sid, i),
+    addCat:         (sid, type)        => activeProject && addCat(activeProject.id, sid, type),
+    remCat:         (sid, cid)         => activeProject && remCat(activeProject.id, sid, cid),
+    updCat:         (sid, cid, f, v)   => activeProject && updCat(activeProject.id, sid, cid, f, v),
+    addItem:        (sid, cid)         => activeProject && addItem(activeProject.id, sid, cid),
+    remItem:        (sid, cid, iid)    => activeProject && remItem(activeProject.id, sid, cid, iid),
     updItem:        (sid, cid, iid, f, v) => activeProject && updItem(activeProject.id, sid, cid, iid, f, v),
+    addComparison:  (pid)              => addComparison(pid),
+    removeComparison: (pid, cmpId)     => removeComparison(pid, cmpId),
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -1906,6 +2071,9 @@ function App() {
             project={activeProject}
             handlers={handlers}
             onSavePackage={handleSavePackage}
+            onBack={() => setScreen('dashboard')}
+            darkMode={darkMode}
+            setDarkMode={setDarkMode}
           />
         )}
         {screen === 'compare' && !activeProject && (
