@@ -119,6 +119,10 @@ const SCOL = [
   { dot:'#8b5cf6', text:'text-violet-600 dark:text-violet-400', bg:'bg-violet-600', lightBg:'bg-violet-50 dark:bg-violet-900/30', border:'border-violet-300 dark:border-violet-700', label:'C' },
 ];
 
+const CHART_COLORS = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#64748b'];
+
+const CAT_ICONS = ['🍽️','🍹','🏛️','🎤','💻','📢','👥','🌸','🚌','📋','💰','🎵','📦','⚡','🎪','🛎️','📊','🔧','🎁','🏆','🎯','✈️','🏥','🛒'];
+
 // ── Demo Data ──────────────────────────────────────────────────────────────
 const INIT_PROJECTS = [
   {
@@ -841,6 +845,7 @@ function LineItemRow({ item, onUpdate, onRemove, isRevenue }) {
 // ── Category Group ─────────────────────────────────────────────────────────
 function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem, onRemoveItem }) {
   const [open, setOpen] = useState(true);
+  const [showIcons, setShowIcons] = useState(false);
   const cur = useCur();
   const isRev = cat.isRevenue;
   const grossSub = (cat.items||[]).reduce((a,it)=>a+itemEffValue(it),0);
@@ -852,10 +857,31 @@ function CategoryGroup({ cat, onUpdateCat, onRemoveCat, onUpdateItem, onAddItem,
 
   return (
     <div className="mb-2">
-      <div className="flex items-center gap-1 py-1 group/cat">
+      <div className="flex items-center gap-1 py-1 group/cat relative">
         <button onClick={()=>setOpen(o=>!o)} className="text-slate-400 hover:text-slate-600 flex-shrink-0">
           <Icon name={open?'chevDown':'chevRight'} size={13} />
         </button>
+        {/* Icon picker */}
+        <div className="relative flex-shrink-0">
+          <button onClick={()=>setShowIcons(v=>!v)} title="Set category icon"
+            className="text-sm leading-none hover:scale-110 transition-transform px-0.5">
+            {cat.icon || '❓'}
+          </button>
+          {showIcons && (
+            <div className="absolute top-full left-0 z-30 mt-1 p-2 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-600 grid grid-cols-6 gap-0.5 w-44">
+              {CAT_ICONS.map(ic => (
+                <button key={ic} onClick={()=>{onUpdateCat('icon',ic);setShowIcons(false);}}
+                  className={`text-base p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors ${cat.icon===ic?'bg-indigo-100 dark:bg-indigo-900/40':''}`}>
+                  {ic}
+                </button>
+              ))}
+              <button onClick={()=>{onUpdateCat('icon','');setShowIcons(false);}}
+                className="col-span-6 text-[10px] text-slate-400 hover:text-red-500 py-1 mt-0.5 border-t border-slate-100 dark:border-slate-700">
+                Clear icon
+              </button>
+            </div>
+          )}
+        </div>
         <input value={cat.name} onChange={e=>onUpdateCat('name',e.target.value)}
           className="cell-input flex-1 min-w-0 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" />
         <button onClick={()=>onUpdateCat('isRevenue',!cat.isRevenue)} title="Toggle Revenue / Expense"
@@ -953,33 +979,35 @@ function ScenarioColumn({ scenario, colIdx, onUpdate, onUpdateItem, onAddItem, o
 
       {/* Totals */}
       <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 rounded-b-xl space-y-1.5">
-        <div className="flex justify-between text-xs">
-          <span className="text-slate-500">{scenario.revenueLabel||'Revenue'}</span>
-          <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">{cur(m.revenue)}</span>
+        {/* Revenue row — prominent */}
+        <div className="flex justify-between items-center rounded-lg px-2.5 py-1.5 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/40">
+          <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">{scenario.revenueLabel||'Revenue'}</span>
+          <span className="font-mono font-bold text-sm text-emerald-600 dark:text-emerald-400">{cur(m.revenue)}</span>
         </div>
         {m.cogs > 0 && (
           <>
-            <div className="flex justify-between text-xs">
-              <span className="text-slate-500">− Cost of Revenue</span>
+            <div className="flex justify-between text-xs px-1">
+              <span className="text-amber-600 dark:text-amber-400">− Cost of Revenue</span>
               <span className="font-mono font-semibold text-amber-600 dark:text-amber-400">({cur(m.cogs)})</span>
             </div>
-            <div className="flex justify-between text-xs pt-1 border-t border-slate-200 dark:border-slate-600">
-              <span className="text-slate-600 dark:text-slate-300 font-medium">Gross Profit</span>
-              <span className={`font-mono font-semibold ${m.grossProfit>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.grossProfit)}</span>
+            <div className="flex justify-between items-center text-xs px-1 pt-0.5 border-t border-slate-200 dark:border-slate-600">
+              <span className="text-slate-600 dark:text-slate-300 font-semibold">Gross Profit</span>
+              <span className={`font-mono font-bold ${m.grossProfit>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.grossProfit)}</span>
             </div>
-            <div className="flex justify-between text-xs pb-1 border-b border-slate-200 dark:border-slate-600">
-              <span className="text-slate-400 text-[10px]">Gross Margin</span>
-              <span className={`font-mono text-[10px] ${m.grossMgn>=0?col.text:'text-red-500'}`}>{pct(m.grossMgn)}</span>
+            <div className="flex justify-between text-[10px] px-1 pb-1 border-b border-slate-200 dark:border-slate-600">
+              <span className="text-slate-400">Gross Margin</span>
+              <span className={`font-mono ${m.grossMgn>=0?col.text:'text-red-500'}`}>{pct(m.grossMgn)}</span>
             </div>
           </>
         )}
-        <div className="flex justify-between text-xs">
-          <span className="text-slate-500">− {scenario.expenseLabel||'Expenses'}</span>
-          <span className="font-mono font-semibold text-red-500">({cur(m.expenses)})</span>
+        {/* Expense row — prominent */}
+        <div className="flex justify-between items-center rounded-lg px-2.5 py-1.5 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/40">
+          <span className="text-xs font-bold text-red-600 dark:text-red-400">− {scenario.expenseLabel||'Expenses'}</span>
+          <span className="font-mono font-bold text-sm text-red-500 dark:text-red-400">({cur(m.expenses)})</span>
         </div>
-        <div className="flex justify-between text-xs pt-1.5 border-t border-slate-200 dark:border-slate-600">
-          <span className="font-semibold text-slate-700 dark:text-slate-200">Net Profit</span>
-          <span className={`font-mono font-bold ${m.net>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.net)}</span>
+        <div className="flex justify-between items-center pt-0.5 border-t border-slate-200 dark:border-slate-600">
+          <span className="font-bold text-sm text-slate-700 dark:text-slate-200">Net Profit</span>
+          <span className={`font-mono font-bold text-base ${m.net>=0?'text-emerald-600 dark:text-emerald-400':'text-red-500'}`}>{cur(m.net)}</span>
         </div>
         <div className="flex justify-between text-xs">
           <span className="text-slate-400">Net Margin</span>
@@ -1127,6 +1155,108 @@ function AIInsightPanel({ scenarios }) {
   );
 }
 
+// ── Donut Chart ───────────────────────────────────────────────────────────
+function DonutChart({ segments, size=88 }) {
+  const total = segments.reduce((s,g) => s + Math.max(0, g.value), 0);
+  if (total === 0) return (
+    <svg width={size} height={size}>
+      <circle cx={size/2} cy={size/2} r={size/2-7} fill="none" stroke="#e2e8f0" strokeWidth="11" />
+    </svg>
+  );
+  const cx=size/2, cy=size/2, R=size/2-7, ri=R*0.52;
+  let angle=-Math.PI/2;
+  const paths = segments.filter(s=>s.value>0).map(seg => {
+    const frac=seg.value/total, sweep=frac*2*Math.PI;
+    const c1=Math.cos(angle),s1=Math.sin(angle),c2=Math.cos(angle+sweep),s2=Math.sin(angle+sweep);
+    const large=sweep>Math.PI?1:0;
+    const d=[
+      `M ${cx+ri*c1} ${cy+ri*s1}`,
+      `L ${cx+R*c1} ${cy+R*s1}`,
+      `A ${R} ${R} 0 ${large} 1 ${cx+R*c2} ${cy+R*s2}`,
+      `L ${cx+ri*c2} ${cy+ri*s2}`,
+      `A ${ri} ${ri} 0 ${large} 0 ${cx+ri*c1} ${cy+ri*s1}`,
+      'Z'
+    ].join(' ');
+    angle += sweep;
+    return { d, color:seg.color, label:seg.label, pct:Math.round(frac*100) };
+  });
+  return (
+    <svg width={size} height={size}>
+      {paths.map((p,i) => (
+        <path key={i} d={p.d} fill={p.color} stroke="white" strokeWidth="1.5">
+          <title>{p.label} — {p.pct}%</title>
+        </path>
+      ))}
+    </svg>
+  );
+}
+
+function ScenarioPieBlock({ scenario, textCls }) {
+  const cur = useCur();
+  const m = calcMetrics(scenario);
+  const buildSegs = (isRev) => (scenario.categories||[])
+    .filter(c => c.isRevenue === isRev)
+    .map((cat,i) => {
+      const gross = (cat.items||[]).reduce((s,it)=>s+itemEffValue(it),0);
+      const cog   = (cat.items||[]).reduce((s,it)=>s+itemCogValue(it),0);
+      return { label:(cat.icon?cat.icon+' ':'')+cat.name, value:Math.max(0, isRev?gross-cog:gross), color:CHART_COLORS[i%CHART_COLORS.length] };
+    });
+  const revSegs = buildSegs(true);
+  const expSegs = buildSegs(false);
+  const Legend = ({segs}) => (
+    <div className="space-y-0.5 mt-1">
+      {segs.map((s,i) => (
+        <div key={i} className="flex items-center gap-1 text-[10px]">
+          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:s.color}}/>
+          <span className="truncate text-slate-400 flex-1">{s.label}</span>
+          <span className="font-mono text-slate-500 flex-shrink-0">{s.pct}%</span>
+        </div>
+      ))}
+      {segs.length === 0 && <div className="text-[10px] text-slate-300 italic">No data</div>}
+    </div>
+  );
+  return (
+    <div>
+      <p className={`text-xs font-bold mb-3 truncate ${textCls}`}>{scenario.label||scenario.name}</p>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400 mb-1">{scenario.revenueLabel||'Revenue'} <span className="font-mono">{cur(m.revenue)}</span></p>
+          <div className="flex justify-center"><DonutChart segments={revSegs} size={80}/></div>
+          <Legend segs={revSegs}/>
+        </div>
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-red-500 mb-1">{scenario.expenseLabel||'Expenses'} <span className="font-mono">{cur(m.expenses)}</span></p>
+          <div className="flex justify-center"><DonutChart segments={expSegs} size={80}/></div>
+          <Legend segs={expSegs}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChartsSection({ left, right }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1">
+      <button onClick={()=>setOpen(o=>!o)}
+        className="w-full flex items-center justify-center gap-1.5 py-2 text-xs text-slate-400 hover:text-indigo-500 transition-colors font-medium">
+        <Icon name={open?'chevDown':'chevRight'} size={12}/>
+        {open ? 'Hide Charts' : '📊 Show Breakdown Charts'}
+      </button>
+      {open && (
+        <div className="mt-1 p-5 rounded-xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 shadow-sm">
+          <div className="grid grid-cols-2 gap-8 divide-x divide-slate-100 dark:divide-slate-700">
+            <ScenarioPieBlock scenario={left}  textCls="text-indigo-600 dark:text-indigo-400"/>
+            <div className="pl-8">
+              <ScenarioPieBlock scenario={right} textCls="text-sky-600 dark:text-sky-400"/>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Comparison Pair Row ───────────────────────────────────────────────────
 function ComparisonPairRow({ cmp, project, handlers, onSavePackage, onRemove, pairIdx }) {
   const cur = useCur();
@@ -1196,6 +1326,8 @@ function ComparisonPairRow({ cmp, project, handlers, onSavePackage, onRemove, pa
           <span className="font-semibold">{right.label||right.name}</span>
         </div>
       </div>
+
+      <ChartsSection left={left} right={right} />
     </div>
   );
 }
@@ -1536,11 +1668,16 @@ TASK: Analyze this spreadsheet and extract scenario comparisons. Return ONLY a J
       "revenuePerUnit": <revenue per unit/pax if found, else 0>,
       "categories": [
         {
-          "name": "<category name e.g. อาหารและเครื่องดื่ม / Catering / Venue>",
-          "isRevenue": <true if this category represents income/revenue/ยอดขาย, false if it's a cost/expense/ค่าใช้จ่าย>,
+          "name": "<category name>",
+          "isRevenue": <true if income/sales/ยอดขาย/รายรับ, false if cost/expense/ค่าใช้จ่าย>,
           "isDirect": true,
           "items": [
-            { "name": "<line item name>", "value": <price as number, positive> }
+            {
+              "name": "<line item name>",
+              "qty": <quantity if a qty/จำนวน column exists for this item, else omit>,
+              "value": <if qty present: unit selling price; else total selling/net price — always positive>,
+              "unitCost": <unit cost/ต้นทุน if a separate cost column exists for this item, else omit>
+            }
           ]
         }
       ]
@@ -1550,13 +1687,15 @@ TASK: Analyze this spreadsheet and extract scenario comparisons. Return ONLY a J
 
 RULES:
 1. Detect ALL scenarios (usually side-by-side column groups) — max 3
-2. For each scenario, find its "selling price" or "net" or "ราคาขาย" or "รวม" column (NOT list/normal price)
-3. Category rows = rows with a name but NO numeric value in that scenario's price column
+2. For each scenario, find its "selling price" or "ราคาขาย" or "net" or "รวม" column (NOT list/ราคาปกติ price)
+3. Category rows = rows with a name but NO numeric value in the price column
 4. Line item rows = rows with BOTH a name AND a numeric price value
 5. Skip pure subtotal/total/summary rows
-6. Mark isRevenue=true ONLY for income/sales categories (ยอดขาย, revenue, income, รายรับ); all cost/expense categories get isRevenue=false
-7. If Thai text: อาหาร=food, เครื่องดื่ม=drinks, เวที/Stage=stage, ดอกไม้=flowers, ทีมงาน=staff, ค่าใช้จ่าย=expenses
-8. Return ONLY valid JSON — no markdown, no explanation`;
+6. IMPORTANT — cost detection: if a row has BOTH a selling price column AND a cost/ต้นทุน column, set "value"=selling price and "unitCost"=cost per unit
+7. IMPORTANT — qty detection: if there is a quantity/จำนวน/pax column, set "qty" and "value"=unit price (not total)
+8. Mark isRevenue=true ONLY for income/sales; all cost/expense categories → isRevenue=false
+9. Thai: อาหาร=food, เครื่องดื่ม=drinks, เวที=stage, ดอกไม้=flowers, ทีมงาน=staff, ค่าใช้จ่าย=expenses
+10. Return ONLY valid JSON — no markdown, no explanation`;
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1598,13 +1737,20 @@ RULES:
         name: c.name || 'Category',
         isRevenue: c.isRevenue === true,
         isDirectCost: c.isDirect !== false,
-        items: (c.items || []).map(it => ({
-          id: uid(),
-          name: it.name || 'Item',
-          qty: it.qty ? Number(it.qty) : undefined,
-          unitPrice: it.qty ? Number(it.value || 0) : undefined,
-          value: Number(it.value) || 0,
-        })),
+        items: (c.items || []).map(it => {
+          const hasQty = it.qty != null && it.qty !== '';
+          const qty = hasQty ? Number(it.qty) || 1 : undefined;
+          const unitPrice = hasQty ? Number(it.value) || 0 : undefined;
+          const unitCost = it.unitCost != null && it.unitCost !== '' ? Number(it.unitCost) : undefined;
+          return {
+            id: uid(),
+            name: it.name || 'Item',
+            qty,
+            unitPrice,
+            value: hasQty ? qty * (unitPrice||0) : Number(it.value) || 0,
+            ...(unitCost !== undefined ? { unitCost } : {}),
+          };
+        }),
       })).filter(c => c.items.length > 0),
     }));
 
