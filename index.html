@@ -1458,7 +1458,7 @@ function parseExcelToProject(workbook) {
       const isCat = (!hasNum && name.length > 1) || (isCatKw && val === 0);
 
       if (isCat) {
-        currentCat = { id: uid(), name, isDirect: true, items: [] };
+        currentCat = { id: uid(), name, isRevenue: false, isDirectCost: true, items: [] };
         s.categories.push(currentCat);
       } else if (hasNum) {
         if (!currentCat) {
@@ -1480,10 +1480,13 @@ function parseExcelToProject(workbook) {
     id: uid(),
     name: sheetName || 'Imported Project',
     status: 'draft',
+    currency: 'THB',
+    isFavorite: false,
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     scenarios: scenarios.length > 0 ? scenarios : [
       { id: uid(), label: 'Scenario A', units: 1, pricePerUnit: 0, assumptions: [],
-        categories: [{ id: uid(), name: 'Imported Items', isDirect: true, items: [{ id: uid(), name: 'Item 1', value: 0 }] }] }
+        categories: [{ id: uid(), name: 'Imported Items', isRevenue: false, isDirectCost: true, items: [{ id: uid(), name: 'Item 1', value: 0 }] }] }
     ],
   };
 }
@@ -1528,14 +1531,16 @@ TASK: Analyze this spreadsheet and extract scenario comparisons. Return ONLY a J
   "scenarios": [
     {
       "label": "<scenario name e.g. ช่วงเช้า / Option A / Package 1>",
+      "subtitle": "<short description if found>",
       "units": <number of units/pax if found, else 1>,
-      "pricePerUnit": <price per unit if found, else 0>,
+      "revenuePerUnit": <revenue per unit/pax if found, else 0>,
       "categories": [
         {
           "name": "<category name e.g. อาหารและเครื่องดื่ม / Catering / Venue>",
+          "isRevenue": <true if this category represents income/revenue/ยอดขาย, false if it's a cost/expense/ค่าใช้จ่าย>,
           "isDirect": true,
           "items": [
-            { "name": "<line item name>", "value": <selling/net price as number> }
+            { "name": "<line item name>", "value": <price as number, positive> }
           ]
         }
       ]
@@ -1549,8 +1554,9 @@ RULES:
 3. Category rows = rows with a name but NO numeric value in that scenario's price column
 4. Line item rows = rows with BOTH a name AND a numeric price value
 5. Skip pure subtotal/total/summary rows
-6. If Thai text: อาหาร=food, เครื่องดื่ม=drinks, เวที/Stage=stage, ดอกไม้=flowers, ทีมงาน=staff, ค่าใช้จ่าย=expenses
-7. Return ONLY valid JSON — no markdown, no explanation`;
+6. Mark isRevenue=true ONLY for income/sales categories (ยอดขาย, revenue, income, รายรับ); all cost/expense categories get isRevenue=false
+7. If Thai text: อาหาร=food, เครื่องดื่ม=drinks, เวที/Stage=stage, ดอกไม้=flowers, ทีมงาน=staff, ค่าใช้จ่าย=expenses
+8. Return ONLY valid JSON — no markdown, no explanation`;
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1579,28 +1585,49 @@ RULES:
     const aiData = JSON.parse(jsonMatch[0]);
 
     // Hydrate with IDs to match app schema
+    const scenarios = (aiData.scenarios || []).slice(0, 3).map(s => ({
+      id: uid(),
+      label: s.label || 'Scenario',
+      name: s.label || 'Scenario',
+      subtitle: s.subtitle || '',
+      units: Number(s.units) || 1,
+      revenuePerUnit: Number(s.revenuePerUnit || s.pricePerUnit) || 0,
+      assumptions: [],
+      categories: (s.categories || []).map(c => ({
+        id: uid(),
+        name: c.name || 'Category',
+        isRevenue: c.isRevenue === true,
+        isDirectCost: c.isDirect !== false,
+        items: (c.items || []).map(it => ({
+          id: uid(),
+          name: it.name || 'Item',
+          qty: it.qty ? Number(it.qty) : undefined,
+          unitPrice: it.qty ? Number(it.value || 0) : undefined,
+          value: Number(it.value) || 0,
+        })),
+      })).filter(c => c.items.length > 0),
+    }));
+
+    const comparisons = [];
+    for (let i = 0; i < scenarios.length - 1; i++) {
+      comparisons.push({ id: uid(), leftId: scenarios[i].id, rightId: scenarios[i + 1].id });
+    }
+    if (comparisons.length === 0 && scenarios.length > 0) {
+      const blank = { id: uid(), label: 'Scenario B', name: 'Scenario B', subtitle: '', units: 1, revenuePerUnit: 0, assumptions: [], categories: [] };
+      scenarios.push(blank);
+      comparisons.push({ id: uid(), leftId: scenarios[0].id, rightId: blank.id });
+    }
+
     return {
       id: uid(),
       name: aiData.name || sheetName,
       status: 'draft',
+      currency: 'THB',
+      isFavorite: false,
+      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      scenarios: (aiData.scenarios || []).slice(0, 3).map(s => ({
-        id: uid(),
-        label: s.label || 'Scenario',
-        units: Number(s.units) || 1,
-        pricePerUnit: Number(s.pricePerUnit) || 0,
-        assumptions: [],
-        categories: (s.categories || []).map(c => ({
-          id: uid(),
-          name: c.name || 'Category',
-          isDirect: c.isDirect !== false,
-          items: (c.items || []).map(it => ({
-            id: uid(),
-            name: it.name || 'Item',
-            value: Number(it.value) || 0,
-          })),
-        })).filter(c => c.items.length > 0),
-      })).filter(s => s.categories.length > 0),
+      comparisons,
+      scenarios,
     };
   };
 
@@ -2182,10 +2209,32 @@ function App() {
       {showImport && (
         <ExcelImportModal
           onClose={() => setShowImport(false)}
-          onImport={(proj) => {
+          onImport={(rawProj) => {
+            // Normalise to current schema
+            const scenarios = (rawProj.scenarios || []).map(s => ({
+              ...s,
+              categories: (s.categories || []).map(c => ({
+                ...c,
+                isRevenue: c.isRevenue === true,
+                isDirectCost: c.isDirectCost !== false || c.isDirect !== false,
+              })),
+            }));
+            let { comparisons } = rawProj;
+            if (!comparisons || comparisons.length === 0) {
+              comparisons = [];
+              for (let i = 0; i < scenarios.length - 1; i++) {
+                comparisons.push({ id: uid(), leftId: scenarios[i].id, rightId: scenarios[i + 1].id });
+              }
+              if (comparisons.length === 0 && scenarios.length > 0) {
+                const blank = { id: uid(), label: 'Scenario B', name: 'Scenario B', subtitle: '', units: 1, revenuePerUnit: 0, assumptions: [], categories: [] };
+                scenarios.push(blank);
+                comparisons.push({ id: uid(), leftId: scenarios[0].id, rightId: blank.id });
+              }
+            }
+            const proj = { currency: 'THB', isFavorite: false, createdAt: new Date().toISOString(), ...rawProj, scenarios, comparisons };
             setProjects(prev => [proj, ...prev]);
             openProject(proj.id);
-            showToast(`นำเข้า "${proj.name}" สำเร็จ — ${proj.scenarios.length} scenarios`);
+            showToast(`นำเข้า "${proj.name}" สำเร็จ — ${scenarios.length} scenarios`);
           }}
         />
       )}
