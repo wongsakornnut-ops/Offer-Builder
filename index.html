@@ -1288,31 +1288,149 @@ function ExcelImportModal({ onClose, onImport }) {
   const [scenLabels, setScenLabels] = React.useState([]);
   const [dragging, setDragging] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [useAI, setUseAI] = React.useState(true);
+  const [loading, setLoading] = React.useState(false);
+  const [loadingMsg, setLoadingMsg] = React.useState('');
+  const [apiKey, setApiKey] = React.useState(() => localStorage.getItem('anthropic_key') || '');
+  const [showKey, setShowKey] = React.useState(false);
 
-  const processFile = (file) => {
+  const saveKey = (k) => { setApiKey(k); localStorage.setItem('anthropic_key', k); };
+
+  // ── AI parsing via Claude API ─────────────────────────────────────────────
+  const parseWithAI = async (workbook) => {
+    const sheetName = workbook.SheetNames[0];
+    const ws = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+    // Build a compact text table (max 120 rows, trim long cells)
+    const tableText = rows.slice(0, 120).map(r =>
+      r.map(c => String(c).slice(0, 60)).join('\t')
+    ).join('\n');
+
+    const prompt = `You are parsing a spreadsheet for an event/business scenario comparison app.
+
+SPREADSHEET DATA (tab-separated):
+\`\`\`
+${tableText}
+\`\`\`
+
+TASK: Analyze this spreadsheet and extract scenario comparisons. Return ONLY a JSON object:
+
+{
+  "name": "<project name, use sheet name or first title found>",
+  "scenarios": [
+    {
+      "label": "<scenario name e.g. ช่วงเช้า / Option A / Package 1>",
+      "units": <number of units/pax if found, else 1>,
+      "pricePerUnit": <price per unit if found, else 0>,
+      "categories": [
+        {
+          "name": "<category name e.g. อาหารและเครื่องดื่ม / Catering / Venue>",
+          "isDirect": true,
+          "items": [
+            { "name": "<line item name>", "value": <selling/net price as number> }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+RULES:
+1. Detect ALL scenarios (usually side-by-side column groups) — max 3
+2. For each scenario, find its "selling price" or "net" or "ราคาขาย" or "รวม" column (NOT list/normal price)
+3. Category rows = rows with a name but NO numeric value in that scenario's price column
+4. Line item rows = rows with BOTH a name AND a numeric price value
+5. Skip pure subtotal/total/summary rows
+6. If Thai text: อาหาร=food, เครื่องดื่ม=drinks, เวที/Stage=stage, ดอกไม้=flowers, ทีมงาน=staff, ค่าใช้จ่าย=expenses
+7. Return ONLY valid JSON — no markdown, no explanation`;
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error?.message || `API error ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    const text = data.content[0].text.trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('AI returned invalid JSON');
+    const aiData = JSON.parse(jsonMatch[0]);
+
+    // Hydrate with IDs to match app schema
+    return {
+      id: uid(),
+      name: aiData.name || sheetName,
+      status: 'draft',
+      updatedAt: new Date().toISOString(),
+      scenarios: (aiData.scenarios || []).slice(0, 3).map(s => ({
+        id: uid(),
+        label: s.label || 'Scenario',
+        units: Number(s.units) || 1,
+        pricePerUnit: Number(s.pricePerUnit) || 0,
+        assumptions: [],
+        categories: (s.categories || []).map(c => ({
+          id: uid(),
+          name: c.name || 'Category',
+          isDirect: c.isDirect !== false,
+          items: (c.items || []).map(it => ({
+            id: uid(),
+            name: it.name || 'Item',
+            value: Number(it.value) || 0,
+          })),
+        })).filter(c => c.items.length > 0),
+      })).filter(s => s.categories.length > 0),
+    };
+  };
+
+  // ── Process uploaded file ─────────────────────────────────────────────────
+  const processFile = async (file) => {
     if (!file) return;
     if (!file.name.match(/\.(xlsx|xls|csv)$/i)) { setError('รองรับเฉพาะไฟล์ .xlsx, .xls, .csv'); return; }
-    const reader = new FileReader();
-    reader.onload = (e) => {
+    setError('');
+    setLoading(true);
+
+    const arrayBuf = await file.arrayBuffer();
+    const wb = XLSX.read(arrayBuf, { type: 'array' });
+
+    let proj;
+    if (useAI && apiKey.trim()) {
       try {
-        const wb = XLSX.read(e.target.result, { type: 'array' });
-        const proj = parseExcelToProject(wb);
-        setParsed(proj);
-        setProjectName(proj.name);
-        setScenLabels(proj.scenarios.map(s => s.label));
-        setStep('preview');
-        setError('');
-      } catch(err) {
-        setError('ไม่สามารถอ่านไฟล์ได้: ' + err.message);
+        setLoadingMsg('กำลังส่งข้อมูลให้ AI วิเคราะห์...');
+        proj = await parseWithAI(wb);
+      } catch (err) {
+        setLoading(false);
+        setError('AI Error: ' + err.message + ' — ลองใช้ Auto Parse แทน');
+        return;
       }
-    };
-    reader.readAsArrayBuffer(file);
+    } else {
+      setLoadingMsg('กำลังวิเคราะห์โครงสร้าง...');
+      await new Promise(r => setTimeout(r, 100));
+      proj = parseExcelToProject(wb);
+    }
+
+    setParsed(proj);
+    setProjectName(proj.name);
+    setScenLabels(proj.scenarios.map(s => s.label));
+    setLoading(false);
+    setStep('preview');
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault(); setDragging(false);
-    processFile(e.dataTransfer.files[0]);
-  };
+  const handleDrop = (e) => { e.preventDefault(); setDragging(false); processFile(e.dataTransfer.files[0]); };
 
   const handleImport = () => {
     const proj = {
@@ -1329,6 +1447,7 @@ function ExcelImportModal({ onClose, onImport }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Icon name="upload" size={20} cls="text-indigo-500" /> Import Excel
@@ -1339,88 +1458,127 @@ function ExcelImportModal({ onClose, onImport }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
-          {step === 'upload' && (
-            <div>
+          {/* Loading overlay */}
+          {loading && (
+            <div className="flex flex-col items-center justify-center py-16 gap-4">
+              <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+              <p className="text-slate-600 dark:text-slate-300 font-medium">{loadingMsg}</p>
+              {useAI && <p className="text-xs text-slate-400">Claude กำลังอ่านโครงสร้าง Excel...</p>}
+            </div>
+          )}
+
+          {!loading && step === 'upload' && (
+            <div className="space-y-5">
+              {/* AI toggle */}
+              <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-xl border border-indigo-200 dark:border-indigo-700">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">✨</span>
+                    <span className="font-semibold text-indigo-700 dark:text-indigo-300 text-sm">AI Parse (แนะนำ)</span>
+                    <Badge color="indigo">Claude Haiku</Badge>
+                  </div>
+                  <button onClick={() => setUseAI(u => !u)}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${useAI ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-600'}`}>
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${useAI ? 'translate-x-5' : ''}`} />
+                  </button>
+                </div>
+                {useAI && (
+                  <div>
+                    <label className="block text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Anthropic API Key</label>
+                    <div className="flex gap-2">
+                      <input
+                        type={showKey ? 'text' : 'password'}
+                        value={apiKey}
+                        onChange={e => saveKey(e.target.value)}
+                        placeholder="sk-ant-..."
+                        className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-indigo-300 dark:border-indigo-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-indigo-400 outline-none"
+                      />
+                      <button onClick={() => setShowKey(v => !v)}
+                        className="px-3 py-1.5 text-xs bg-white dark:bg-slate-700 border border-indigo-300 dark:border-indigo-600 rounded-lg text-slate-500 hover:text-slate-700">
+                        {showKey ? 'ซ่อน' : 'แสดง'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-indigo-500 mt-1">เก็บใน localStorage เท่านั้น ไม่ส่งไปที่อื่น</p>
+                  </div>
+                )}
+                {!useAI && <p className="text-xs text-slate-500">ใช้ rule-based parsing (อาจไม่แม่นยำกับ Excel ที่ซับซ้อน)</p>}
+              </div>
+
+              {/* Drop zone */}
               <div
                 onDragOver={e => { e.preventDefault(); setDragging(true); }}
                 onDragLeave={() => setDragging(false)}
                 onDrop={handleDrop}
-                className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors cursor-pointer
+                className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors cursor-pointer
                   ${dragging ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20' : 'border-slate-300 dark:border-slate-600 hover:border-indigo-400'}`}
                 onClick={() => document.getElementById('xl-file-input').click()}
               >
-                <Icon name="upload" size={40} cls="mx-auto text-slate-400 mb-3" />
+                <Icon name="upload" size={36} cls="mx-auto text-slate-400 mb-3" />
                 <p className="font-semibold text-slate-700 dark:text-slate-200 mb-1">วาง Excel ที่นี่ หรือ คลิกเพื่อเลือกไฟล์</p>
                 <p className="text-sm text-slate-400">รองรับ .xlsx, .xls, .csv</p>
                 <input id="xl-file-input" type="file" accept=".xlsx,.xls,.csv" className="hidden"
                   onChange={e => processFile(e.target.files[0])} />
               </div>
-              {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
-              <div className="mt-6 p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl text-sm text-slate-500 dark:text-slate-400">
-                <p className="font-medium text-slate-700 dark:text-slate-200 mb-2">รูปแบบ Excel ที่รองรับ:</p>
-                <ul className="space-y-1 list-disc list-inside">
-                  <li>คอลัมน์แรก = รายการ (ชื่อสินค้า/บริการ)</li>
-                  <li>คอลัมน์ถัดไป = จำนวน, ราคา, รวม (ต่อ scenario)</li>
-                  <li>สามารถมีหลาย scenario วางข้างกัน</li>
-                  <li>แถว category = แถวที่มีชื่อแต่ไม่มีราคา</li>
-                </ul>
-              </div>
+              {error && <p className="text-sm text-red-500 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg">{error}</p>}
             </div>
           )}
 
-          {step === 'preview' && parsed && (
+          {!loading && step === 'preview' && parsed && (
             <div className="space-y-5">
+              <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 font-medium">
+                <span>✓</span> {useAI && apiKey ? 'AI วิเคราะห์สำเร็จ' : 'Auto-parse สำเร็จ'}
+                <span className="text-slate-400 font-normal">— {parsed.scenarios.length} scenario · {totalItems} items</span>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">ชื่อ Project</label>
                 <input value={projectName} onChange={e => setProjectName(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm focus:ring-2 focus:ring-indigo-400 outline-none" />
               </div>
 
-              <div>
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">
-                  พบ {parsed.scenarios.length} Scenario · {parsed.scenarios.reduce((s, sc) => s + sc.categories.length, 0)} หมวด · {totalItems} รายการ
-                </p>
-                <div className="space-y-3">
-                  {parsed.scenarios.map((s, i) => (
-                    <div key={s.id} className="border border-slate-200 dark:border-slate-600 rounded-xl overflow-hidden">
-                      <div className="flex items-center gap-3 px-4 py-2.5" style={{ background: ['#eef2ff','#f0f9ff','#f5f3ff'][i] || '#f8fafc' }}>
-                        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: ['#6366f1','#0ea5e9','#8b5cf6'][i] || '#94a3b8' }} />
-                        <input value={scenLabels[i] || ''} onChange={e => setScenLabels(sl => sl.map((l,j) => j===i ? e.target.value : l))}
-                          className="flex-1 bg-transparent text-sm font-semibold text-slate-800 outline-none border-b border-transparent focus:border-indigo-400" />
-                        <span className="text-xs text-slate-500">{s.categories.reduce((sum,c) => sum+c.items.length, 0)} items</span>
-                      </div>
-                      <div className="px-4 py-2 max-h-48 overflow-y-auto">
-                        {s.categories.map(cat => (
-                          <div key={cat.id} className="mb-2">
-                            <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1">{cat.name}</p>
-                            {cat.items.slice(0, 5).map(it => (
-                              <div key={it.id} className="flex justify-between text-xs py-0.5 text-slate-600 dark:text-slate-300">
-                                <span className="truncate mr-4">{it.name}</span>
-                                <span className="flex-shrink-0 font-mono">{currency(it.value)}</span>
-                              </div>
-                            ))}
-                            {cat.items.length > 5 && <p className="text-xs text-slate-400 italic">+{cat.items.length - 5} more...</p>}
-                          </div>
-                        ))}
-                      </div>
+              <div className="space-y-3">
+                {parsed.scenarios.map((s, i) => (
+                  <div key={s.id} className="border border-slate-200 dark:border-slate-600 rounded-xl overflow-hidden">
+                    <div className="flex items-center gap-3 px-4 py-2.5" style={{ background: ['#eef2ff','#f0f9ff','#f5f3ff'][i] || '#f8fafc' }}>
+                      <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: ['#6366f1','#0ea5e9','#8b5cf6'][i] || '#94a3b8' }} />
+                      <input value={scenLabels[i] || ''} onChange={e => setScenLabels(sl => sl.map((l,j) => j===i ? e.target.value : l))}
+                        className="flex-1 bg-transparent text-sm font-semibold text-slate-800 outline-none border-b border-transparent focus:border-indigo-400" />
+                      <span className="text-xs text-slate-500">{s.categories.reduce((sum,c) => sum+c.items.length,0)} items</span>
                     </div>
-                  ))}
-                </div>
+                    <div className="px-4 py-2 max-h-52 overflow-y-auto">
+                      {s.categories.map(cat => (
+                        <div key={cat.id} className="mb-2">
+                          <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1">{cat.name}</p>
+                          {cat.items.slice(0, 6).map(it => (
+                            <div key={it.id} className="flex justify-between text-xs py-0.5 text-slate-600 dark:text-slate-300">
+                              <span className="truncate mr-4">{it.name}</span>
+                              <span className="flex-shrink-0 font-mono">{currency(it.value)}</span>
+                            </div>
+                          ))}
+                          {cat.items.length > 6 && <p className="text-xs text-slate-400 italic">+{cat.items.length-6} more...</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex justify-between">
-          {step === 'preview' ? (
-            <>
-              <Btn v="ghost" onClick={() => setStep('upload')}>← เลือกไฟล์ใหม่</Btn>
-              <Btn v="primary" onClick={handleImport}><Icon name="upload" size={15} />Import เป็น Project ใหม่</Btn>
-            </>
-          ) : (
-            <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
-          )}
-        </div>
+        {/* Footer */}
+        {!loading && (
+          <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex justify-between">
+            {step === 'preview' ? (
+              <>
+                <Btn v="ghost" onClick={() => setStep('upload')}>← เลือกไฟล์ใหม่</Btn>
+                <Btn v="primary" onClick={handleImport}><Icon name="upload" size={15} />Import เป็น Project ใหม่</Btn>
+              </>
+            ) : (
+              <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
