@@ -1414,11 +1414,106 @@ function ScenarioCompare({ project, onBack, onSavePackage, handlers, darkMode, s
 }
 
 // ── Package Library ────────────────────────────────────────────────────────
-function PackageCard({ pkg, onToggleFav, onUse, onClone }) {
+function PackageDetailModal({ pkg, onClose, onUse, onClone }) {
+  const cur = useCur();
+  const catColors = {'Events':'indigo','SaaS':'sky','Marketing':'violet','Food & Beverage':'amber','Professional Services':'green'};
+  const typeColors = {package:'blue',template:'violet',favorite:'amber'};
+  const m = pkg.metrics || {};
+  const scenario = pkg.scenario || {};
+  const assumptions = scenario.assumptions || pkg.assumptions || [];
+  const categories = scenario.categories || [];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100 dark:border-slate-700 flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <Badge color={catColors[pkg.category]||'gray'}>{pkg.category}</Badge>
+              <Badge color={typeColors[pkg.saveType]||'gray'}>{pkg.saveType}</Badge>
+            </div>
+            <h2 className="text-lg font-bold">{pkg.name}</h2>
+            {pkg.description && <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{pkg.description}</p>}
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 flex-shrink-0">
+            <Icon name="x" size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-5">
+          {/* Metrics */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3 text-center">
+              <p className="text-xs text-slate-400 mb-1">Revenue</p>
+              <p className="font-bold text-sm text-emerald-600">{cur(m.rev||0)}</p>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3 text-center">
+              <p className="text-xs text-slate-400 mb-1">Profit</p>
+              <p className={`font-bold text-sm ${(m.profit||0)>=0?'text-emerald-600':'text-red-500'}`}>{cur(m.profit||0)}</p>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3 text-center">
+              <p className="text-xs text-slate-400 mb-1">Margin</p>
+              <p className={`font-bold text-sm ${(m.margin||0)>=0?'text-emerald-600':'text-red-500'}`}>{pct(m.margin||0)}</p>
+            </div>
+          </div>
+          {/* Tags */}
+          {(pkg.tags||[]).length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Tags</p>
+              <div className="flex flex-wrap gap-1.5">
+                {(pkg.tags||[]).map(t=><Badge key={t} color="gray">{t}</Badge>)}
+              </div>
+            </div>
+          )}
+          {/* Categories / Segments */}
+          {categories.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Segments</p>
+              <div className="space-y-2">
+                {categories.map((cat,i) => {
+                  const cm = calcCategoryMetrics(cat);
+                  return (
+                    <div key={cat.id||i} className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-slate-800 px-3 py-2">
+                      <span className="text-sm font-medium">{cat.name}</span>
+                      <div className="flex gap-3 text-xs">
+                        {cm.revenue > 0 && <span className="text-emerald-600 font-semibold">Rev {cur(cm.revenue)}</span>}
+                        {cm.cost > 0 && <span className="text-red-500 font-semibold">Cost {cur(cm.cost)}</span>}
+                        <span className={`font-bold ${cm.net>=0?'text-emerald-600':'text-red-500'}`}>Net {cur(cm.net)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {/* Assumptions */}
+          {assumptions.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Assumptions</p>
+              <ul className="space-y-1">
+                {assumptions.map((a,i)=>(
+                  <li key={i} className="flex items-start gap-2 text-sm text-slate-600 dark:text-slate-300">
+                    <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                    {typeof a === 'string' ? a : a.text || a.label || JSON.stringify(a)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <p className="text-xs text-slate-400">Saved {pkg.savedAt ? new Date(pkg.savedAt).toLocaleDateString() : ''} · Used {pkg.usageCount||0}× times</p>
+        </div>
+        <div className="p-4 border-t border-slate-100 dark:border-slate-700 flex gap-3">
+          <Btn v="primary" cls="flex-1 justify-center" onClick={onUse}><Icon name="arrowRight" size={14} />Use Package</Btn>
+          <Btn v="secondary" cls="flex-1 justify-center" onClick={onClone}><Icon name="copy" size={14} />Clone</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PackageCard({ pkg, onToggleFav, onUse, onClone, onView }) {
   const catColors = {'Events':'indigo','SaaS':'sky','Marketing':'violet','Food & Beverage':'amber','Professional Services':'green'};
   const typeColors = {package:'blue',template:'violet',favorite:'amber'};
   return (
-    <Card cls="p-4 flex flex-col">
+    <Card cls="p-4 flex flex-col cursor-pointer hover:shadow-lg transition-shadow" onClick={onView}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1 min-w-0 mr-2">
           <h3 className="font-semibold text-sm leading-snug">{pkg.name}</h3>
@@ -1427,7 +1522,7 @@ function PackageCard({ pkg, onToggleFav, onUse, onClone }) {
             <Badge color={typeColors[pkg.saveType]||'gray'}>{pkg.saveType}</Badge>
           </div>
         </div>
-        <button onClick={onToggleFav} className="p-1 transition-colors flex-shrink-0">
+        <button onClick={e=>{e.stopPropagation();onToggleFav();}} className="p-1 transition-colors flex-shrink-0">
           <StarIcon filled={pkg.isFavorite} size={16} cls={pkg.isFavorite?'':'text-slate-300 hover:text-amber-400'} />
         </button>
       </div>
@@ -1440,7 +1535,7 @@ function PackageCard({ pkg, onToggleFav, onUse, onClone }) {
       <div className="flex flex-wrap gap-1 mb-3">
         {(pkg.tags||[]).slice(0,3).map(t=><Badge key={t} color="gray">{t}</Badge>)}
       </div>
-      <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+      <div className="flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-700" onClick={e=>e.stopPropagation()}>
         <Btn v="ghost" sz="sm" cls="flex-1 justify-center text-xs" onClick={onUse}><Icon name="arrowRight" size={12} />Use</Btn>
         <Btn v="ghost" sz="sm" cls="flex-1 justify-center text-xs" onClick={onClone}><Icon name="copy" size={12} />Clone</Btn>
         <span className="text-xs text-slate-300 dark:text-slate-600">·</span>
@@ -1454,6 +1549,7 @@ function PackageLibrary({ packages, onBack, onToggleFav, onUse, onClone, darkMod
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [catFilter, setCatFilter] = useState('all');
+  const [viewPkg, setViewPkg] = useState(null);
   const cats = ['all', ...Array.from(new Set(packages.map(p=>p.category)))];
   const filtered = packages.filter(p => {
     const q = search.toLowerCase();
@@ -1514,11 +1610,19 @@ function PackageLibrary({ packages, onBack, onToggleFav, onUse, onClone, darkMod
               <PackageCard key={pkg.id} pkg={pkg}
                 onToggleFav={()=>onToggleFav(pkg.id)}
                 onUse={()=>onUse(pkg)}
-                onClone={()=>onClone(pkg)} />
+                onClone={()=>onClone(pkg)}
+                onView={()=>setViewPkg(pkg)} />
             ))}
           </div>
         )}
       </div>
+      {viewPkg && (
+        <PackageDetailModal
+          pkg={viewPkg}
+          onClose={()=>setViewPkg(null)}
+          onUse={()=>{onUse(viewPkg);setViewPkg(null);}}
+          onClone={()=>{onClone(viewPkg);setViewPkg(null);}} />
+      )}
     </div>
   );
 }
@@ -2351,6 +2455,9 @@ function App() {
             onToggleFav={toggleFavPackage}
             onUse={usePackage}
             onClone={clonePackage}
+            onBack={() => setScreen('dashboard')}
+            darkMode={darkMode}
+            setDarkMode={setDarkMode}
           />
         )}
       </main>
